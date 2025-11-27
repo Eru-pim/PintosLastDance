@@ -54,7 +54,9 @@ dkms.conf
 # debug information files
 *.dwo
 
-.vscode
-.devcontainer
+.vscode/*
+!.vscode/*.template
+.devcontainer/*
+!.devcontainer/*.template
 build
 logfile

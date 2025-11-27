@@ -1,0 +1,40 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "I hate PintOS (threads)",
+            "type": "gdb",
+            "request": "attach",
+            "executable": "${workspaceRoot}/pintos/threads/build/kernel.o",
+            "target": "localhost:1234",
+            "remote": true,
+            "cwd": "${workspaceRoot}",
+            "valuesFormatting": "parseText",
+            "printCalls": false
+        },
+
+        {
+            "name": "I hate PintOS (userprog)",
+            "type": "gdb",
+            "request": "attach",
+            "executable": "${workspaceRoot}/pintos/userprog/build/kernel.o",
+            "target": "localhost:1234",
+            "remote": true,
+            "cwd": "${workspaceRoot}",
+            "valuesFormatting": "parseText",
+            "printCalls": false
+        },
+
+        {
+            "name": "I hate PintOS (vm)",
+            "type": "gdb",
+            "request": "attach",
+            "executable": "${workspaceRoot}/pintos/vm/build/kernel.o",
+            "target": "localhost:1234",
+            "remote": true,
+            "cwd": "${workspaceRoot}",
+            "valuesFormatting": "parseText",
+            "printCalls": false
+        }
+    ]
+}
