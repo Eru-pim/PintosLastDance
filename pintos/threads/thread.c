@@ -14,7 +14,7 @@
 #include "fixed-point.h"
 #ifdef USERPROG
 #include "userprog/process.h"
-#endif
+#endif /* USERPROG */
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -639,7 +639,7 @@ init_thread (struct thread *t, const char *name, int priority) {
     sema_init(&t->sema_wait, 0);
     sema_init(&t->sema_load, 0);
     sema_init(&t->sema_exit, 0);
-#endif
+#endif /* USERPROG */
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
