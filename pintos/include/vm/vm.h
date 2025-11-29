@@ -1,6 +1,7 @@
 #ifndef VM_VM_H
 #define VM_VM_H
 #include <hash.h>
+#include <list.h>
 #include <stdbool.h>
 #include "threads/palloc.h"
 
@@ -64,6 +65,7 @@ struct page {
 struct frame {
     void *kva;
     struct page *page;
+    struct list_elem elem;
 };
 
 /* The function table for page operations.

@@ -1,8 +1,12 @@
 /* vm.c: Generic interface for virtual memory objects. */
 
+#include "threads/thread.h"
 #include "threads/malloc.h"
+#include "threads/mmu.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
+
+struct list frame_table;
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -16,6 +20,7 @@ vm_init (void) {
     register_inspect_intr ();
     /* DO NOT MODIFY UPPER LINES. */
     /* TODO: Your code goes here. */
+    list_init(&frame_table);
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -119,8 +124,18 @@ vm_evict_frame (void) {
  * space.*/
 static struct frame *
 vm_get_frame (void) {
-    struct frame *frame = NULL;
     /* TODO: Fill this function. */
+    struct frame *frame = malloc(sizeof(struct frame));
+    ASSERT(frame != NULL);
+    
+    if (!(frame->kva = palloc_get_page(PAL_USER | PAL_ZERO))) {
+        free(frame);
+        frame = vm_evict_frame();
+        frame->page = NULL;
+    } else {
+        frame->page = NULL;
+        list_push_back(&frame_table, &frame->elem);
+    }
 
     ASSERT (frame != NULL);
     ASSERT (frame->page == NULL);
@@ -159,10 +174,13 @@ vm_dealloc_page (struct page *page) {
 
 /* Claim the page that allocate on VA. */
 bool
-vm_claim_page (void *va UNUSED) {
-    struct page *page = NULL;
+vm_claim_page (void *va) {
     /* TODO: Fill this function */
-
+    struct thread *curr = thread_current();
+    struct page *page = spt_find_page(&curr->spt, va);
+    if (!page) {
+        return false;
+    }
     return vm_do_claim_page (page);
 }
 
@@ -170,13 +188,15 @@ vm_claim_page (void *va UNUSED) {
 static bool
 vm_do_claim_page (struct page *page) {
     struct frame *frame = vm_get_frame ();
-
+    struct thread *curr = thread_current();
     /* Set links */
     frame->page = page;
     page->frame = frame;
 
     /* TODO: Insert page table entry to map page's VA to frame's PA. */
-
+    if (!pml4_set_page(curr->pml4, page->va, frame->kva, true)) {
+        return false;
+    }
     return swap_in (page, frame->kva);
 }
 
