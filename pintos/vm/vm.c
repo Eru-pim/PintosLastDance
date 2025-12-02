@@ -5,9 +5,11 @@
 #include "vm/inspect.h"
 #include "threads/mmu.h"
 #include <hash.h>
+#include <string.h>
 
 static struct list frame_table;
 static struct lock frame_lock;
+static struct lock hash_lock;
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -23,6 +25,7 @@ vm_init (void) {
 	/* TODO: Your code goes here. */
 	list_init(&frame_table);
 	lock_init(&frame_lock);
+    lock_init(&hash_lock);
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -43,6 +46,7 @@ page_get_type (struct page *page) {
 static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
+static void page_destructor(struct hash_elem *e, void *aux UNUSED);
 
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
@@ -101,8 +105,10 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
         struct page *page UNUSED) {
     int succ = false;
     /* TODO: Fill this function. */
-    if (hash_insert(&spt->hash_table, &page->hash_elem) != NULL)
+    lock_acquire(&hash_lock);
+    if (hash_insert(&spt->hash_table, &page->hash_elem) == NULL)
         succ = true;
+    lock_release(&hash_lock);
 
     return succ;
 }
@@ -178,8 +184,15 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
     struct page *page = NULL;
     /* TODO: Validate the fault */
     /* TODO: Your code goes here */
+    if (addr != NULL && not_present && user){
+        addr = pg_round_down(addr);
+        page = spt_find_page(spt, addr);
+        if (page != NULL){
+            return vm_do_claim_page (page);
+        }
+    }
 
-    return vm_do_claim_page (page);
+    return false;
 }
 
 /* Free the page.
@@ -235,10 +248,67 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
     hash_init(&spt->hash_table, page_hash, page_less, NULL);
 }
 
+struct aux {
+    struct file *file;
+    off_t ofs;
+    size_t page_read_bytes;
+    size_t page_zero_bytes;
+    bool writable;
+};
+
 /* Copy supplemental page table from src to dst */
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
         struct supplemental_page_table *src UNUSED) {
+    struct hash_iterator i;
+    hash_first(&i, &src->hash_table);
+    while(hash_next(&i)){
+        struct page *src_page = hash_entry(hash_cur(&i), struct page, hash_elem);
+        if (src_page == NULL)
+            goto err;
+        enum vm_type src_type = src_page->operations->type;
+        switch(src_type) {
+            case VM_UNINIT:{
+                struct aux *src_aux = src_page->uninit.aux;
+                struct aux *dst_aux = malloc(sizeof(struct aux));
+                if (src_aux == NULL || dst_aux == NULL)
+                    goto err;
+                if (src_aux->file != NULL)
+                    dst_aux->file = file_duplicate(src_aux->file);
+                else
+                    dst_aux->file = NULL;
+                dst_aux->ofs = src_aux->ofs;
+                dst_aux->page_read_bytes = src_aux->page_read_bytes;
+                dst_aux->page_zero_bytes = src_aux->page_zero_bytes;
+                dst_aux->writable = src_aux->writable;
+
+                if (!vm_alloc_page_with_initializer(src_page->uninit.type, src_page->va, src_page->writable, src_page->uninit.init, dst_aux))
+                    goto err;
+                break;
+            }
+            case VM_ANON:{
+                if (!vm_alloc_page(src_type, src_page->va, src_page->writable))
+                    goto err;
+                if (!vm_claim_page(src_page->va))
+                    goto err;
+                
+                struct page *dst_page = spt_find_page(dst, src_page->va);
+                if (dst_page == NULL)
+                    goto err;
+                // frame->kva가 NULL일 경우 swap에서 읽어와야 함
+                if (src_page->frame->kva != NULL)
+                    memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
+                break;
+            }
+            case VM_FILE:
+                break;
+            default:
+                break;
+        }
+    }
+    return true;
+err :
+    return false;
 }
 
 /* Free the resource hold by the supplemental page table */
@@ -246,4 +316,41 @@ void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
     /* TODO: Destroy all the supplemental_page_table hold by thread and
      * TODO: writeback all the modified contents to the storage. */
+    // 이거 넣으면 바로 문제 일어남
+    hash_destroy(&spt->hash_table, page_destructor);
+}
+
+static void // 타입별로 따로 처리해줘야 함. writeback은 일단 나중에
+page_destructor(struct hash_elem *e, void *aux UNUSED){
+    struct page *page = hash_entry(e, struct page, hash_elem);
+    vm_dealloc_page(page);
+}
+
+/* Returns a hash value for page p. */
+unsigned
+page_hash (const struct hash_elem *p_, void *aux UNUSED) {
+    const struct page *p = hash_entry (p_, struct page, hash_elem);
+    return hash_bytes (&p->va, sizeof p->va);
+}
+
+/* Returns true if page a precedes page b. */
+bool
+page_less (const struct hash_elem *a_,
+        const struct hash_elem *b_, void *aux UNUSED) {
+    const struct page *a = hash_entry (a_, struct page, hash_elem);
+    const struct page *b = hash_entry (b_, struct page, hash_elem);
+
+    return a->va < b->va;
+}
+
+/* Returns the page containing the given virtual address, or NULL. */
+struct page *
+page_lookup (const struct supplemental_page_table *spt, const void *address) {
+    struct page p;
+    struct hash_elem *e;
+
+    address = pg_round_down (address);
+    p.va = (void *) address;
+    e = hash_find (&spt->hash_table, &p.hash_elem);
+    return e != NULL ? hash_entry (e, struct page, hash_elem) : NULL;
 }

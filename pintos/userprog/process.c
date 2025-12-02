@@ -247,6 +247,7 @@ process_exec (void *f_name) {
 
     /* We first kill the current context */
     process_cleanup ();
+    supplemental_page_table_init(&thread_current()->spt);
 
     /* And then load the binary */
     lock_acquire(&filesys_lock);
@@ -757,12 +758,35 @@ install_page (void *upage, void *kpage, bool writable) {
 /* From here, codes will be used after project 3.
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
+struct aux {
+    struct file *file;
+    off_t ofs;
+    size_t page_read_bytes;
+    size_t page_zero_bytes;
+    bool writable;
+};
 
 static bool
 lazy_load_segment (struct page *page, void *aux) {
     /* TODO: Load the segment from the file */
     /* TODO: This called when the first page fault occurs on address VA. */
     /* TODO: VA is available when calling this function. */
+    struct aux *load_aux = aux;
+    struct file *file = load_aux->file;
+    off_t ofs = load_aux->ofs;
+    size_t page_read_bytes = load_aux->page_read_bytes;
+    size_t page_zero_bytes = load_aux->page_zero_bytes;
+    bool writable = load_aux->writable;
+
+    uint8_t *kpage = page->frame->kva;
+    
+    file_seek(file, ofs);
+    if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
+        return false;
+    memset(kpage+page_read_bytes, 0, page_zero_bytes);
+    
+    free(aux);
+    return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -794,16 +818,26 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
         size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
         /* TODO: Set up aux to pass information to the lazy_load_segment. */
-        void *aux = NULL;
-        if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-                    writable, lazy_load_segment, aux))
-            return false;
+        struct aux *aux = malloc(sizeof(struct aux));
 
+        aux->file = file;
+        aux->ofs = ofs;
+        aux->page_read_bytes = page_read_bytes;
+        aux->page_zero_bytes = page_zero_bytes;
+        aux->writable = writable;
+
+        if (!vm_alloc_page_with_initializer (VM_ANON, upage,
+                    writable, lazy_load_segment, aux)){
+                        free(aux);
+                        return false;
+                    }
         /* Advance. */
         read_bytes -= page_read_bytes;
         zero_bytes -= page_zero_bytes;
+        ofs += page_read_bytes;
         upage += PGSIZE;
     }
+
     return true;
 }
 
@@ -817,6 +851,15 @@ setup_stack (struct intr_frame *if_) {
      * TODO: If success, set the rsp accordingly.
      * TODO: You should mark the page is stack. */
     /* TODO: Your code goes here */
+
+    if (!vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true)){
+        return false;
+    }
+    if (!vm_claim_page(stack_bottom))
+        return false;
+    
+    if_->rsp = USER_STACK;
+    success = true;
 
     return success;
 }

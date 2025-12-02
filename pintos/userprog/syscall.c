@@ -51,7 +51,10 @@ syscall_init (void) {
 /* Helper functions */
 static void check_addr(const void *addr) {
     struct thread *curr = thread_current();
-    if (addr == NULL || addr >= (void *)KERN_BASE || pml4_get_page(curr->pml4, addr) == NULL) {
+    if (pml4_get_page(curr->pml4, addr) == NULL) {
+        
+    }
+    if (addr == NULL || addr >= (void *)KERN_BASE) {
         curr->exit_num = -1;
         thread_exit();
     }
