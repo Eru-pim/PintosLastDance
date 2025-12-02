@@ -36,7 +36,7 @@ typedef int tid_t;
 #define RECENT_CPU_DEFAULT 0
 #define LOAD_AVG_DEFAULT 0
 
-#define MAX_FILE 64
+#define MAX_FILE 32
 
 #define NULL_FD -1
 #define STDIN  0
