@@ -3,6 +3,7 @@
 #include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/mmu.h"
+#include "vm/uninit.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
 
@@ -51,6 +52,15 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 
     ASSERT (VM_TYPE(type) != VM_UNINIT)
 
+    bool (*initializer)(struct page *, enum vm_type, void *);
+    if (VM_TYPE(type) == VM_ANON) {
+        initializer = anon_initializer;
+    } else if (VM_TYPE(type) == VM_FILE) {
+        initializer = file_backed_initializer;
+    } else {
+        PANIC("asdf");
+    }
+
     struct supplemental_page_table *spt = &thread_current ()->spt;
 
     /* Check wheter the upage is already occupied or not. */
@@ -58,9 +68,20 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
         /* TODO: Create the page, fetch the initialier according to the VM type,
          * TODO: and then create "uninit" page struct by calling uninit_new. You
          * TODO: should modify the field after calling the uninit_new. */
+        struct page *page = malloc(sizeof(struct page));
 
+        uninit_new(page, upage, init, type, aux, initializer);
+        
+        page->writable = writable;
         /* TODO: Insert the page into the spt. */
+        if (!spt_insert_page(spt, page)) {
+            free(page);
+            goto err;
+        }
     }
+
+    return true;
+
 err:
     return false;
 }
@@ -70,18 +91,16 @@ struct page *
 spt_find_page (struct supplemental_page_table *spt, void *va) {
     ASSERT(spt != NULL);
     /* TODO: Fill this function. */
-    struct page *page;
-    struct hash_iterator iter;
-    hash_first(&iter, &spt->spt_hash);
+    struct page page;
+    page.va = pg_round_down(va);
+    
+    struct hash_elem *e = hash_find(&spt->spt_hash, &page.hash_elem);
 
-    while (hash_next(&iter)) {
-        struct page *page = hash_entry(hash_cur(&iter), struct page, hash_elem);
-        if (page->va == va) {
-            return page;
-        }
+    if (!e) {
+        return NULL;
     }
 
-    return NULL;
+    return hash_entry(e, struct page, hash_elem);
 }
 
 /* Insert PAGE into spt with validation. */
@@ -143,8 +162,13 @@ vm_get_frame (void) {
 }
 
 /* Growing the stack. */
-static void
-vm_stack_growth (void *addr UNUSED) {
+static bool
+vm_stack_growth (void *addr) {
+    void *page_addr = pg_round_down(addr);
+    if (!vm_alloc_page(VM_ANON | VM_MARKER_0, page_addr, true)) {
+        return false;
+    }
+    return vm_claim_page(page_addr);
 }
 
 /* Handle the fault on write_protected page */
@@ -154,12 +178,32 @@ vm_handle_wp (struct page *page UNUSED) {
 
 /* Return true on success */
 bool
-vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
-        bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
-    struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
-    struct page *page = NULL;
+vm_try_handle_fault (struct intr_frame *f, void *addr,
+                     bool user, bool write, bool not_present) {
+    struct supplemental_page_table *spt = &thread_current()->spt;
+    struct page *page;
     /* TODO: Validate the fault */
     /* TODO: Your code goes here */
+    if (addr == NULL || is_kernel_vaddr(addr)) {
+        return false;
+    }
+
+    page = spt_find_page(spt, addr);
+    if (page == NULL) {
+        void *rsp = f->rsp;
+        
+        if (addr < USER_STACK &&
+            addr >= rsp - 8 &&
+            ((void *)USER_STACK - addr) <= (1 << 20)) {
+                
+            return vm_stack_growth(addr);
+        }
+        return false;
+    }
+
+    if (write && !page->writable) {
+        return false;
+    }
 
     return vm_do_claim_page (page);
 }
@@ -194,7 +238,7 @@ vm_do_claim_page (struct page *page) {
     page->frame = frame;
 
     /* TODO: Insert page table entry to map page's VA to frame's PA. */
-    if (!pml4_set_page(curr->pml4, page->va, frame->kva, true)) {
+    if (!pml4_set_page(curr->pml4, page->va, frame->kva, page->writable)) {
         return false;
     }
     return swap_in (page, frame->kva);
