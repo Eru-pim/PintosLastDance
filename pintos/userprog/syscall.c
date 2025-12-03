@@ -8,12 +8,14 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/loader.h"
+#include "threads/mmu.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "userprog/gdt.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
+#include "vm/vm.h"
 #include "intrinsic.h"
 
 void syscall_entry (void);
@@ -34,6 +36,8 @@ void syscall_handler (struct intr_frame *);
 
 struct lock filesys_lock;
 
+static void terminate_process(void);
+
 void
 syscall_init (void) {
     write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48  |
@@ -49,20 +53,17 @@ syscall_init (void) {
 }
 
 /* Helper functions */
-static void check_addr(const void *addr) {
+static void
+terminate_process(void) {
     struct thread *curr = thread_current();
+    curr->exit_num = -1;
+    thread_exit();
+}
+
+static void
+check_addr(const void *addr) {
     if (addr == NULL || addr >= (void *)KERN_BASE) {
-        curr->exit_num = -1;
-        thread_exit();
-    }
-    if (pml4_get_page(curr->pml4, addr) == NULL){
-        addr = pg_round_down(addr);
-        if(spt_find_page(&curr->spt, addr)){
-            if(vm_claim_page(addr))
-                return;
-        }
-        curr->exit_num = -1;
-        thread_exit();
+        terminate_process();
     }
 }
 
@@ -84,15 +85,32 @@ static int get_free_fd(struct thread *t) {
     return -1;
 }
 
-static void check_user_buffer(const char* buffer, unsigned size){
-    char *start = (char *)buffer;
-    char *end = buffer + size;
+static void
+check_user_buffer(const void *buffer, unsigned size, bool to_write) {
+    if (size == 0) {
+        return;
+    }
 
-    for(char *p = start; p < end;){
-        check_addr(p);
+    check_addr(buffer);
 
-        char *next = pg_round_down(p) + PGSIZE;
-        p = next;
+    uintptr_t start = (uintptr_t) buffer;
+    uintptr_t end = start + size;
+    if (end < start) {
+        terminate_process();
+    }
+
+    uintptr_t page_addr = (uintptr_t) pg_round_down((void *) start);
+    while (page_addr < end) {
+        check_addr((void *) page_addr);
+#ifdef VM
+        struct page *page = spt_find_page(&thread_current()->spt, (void *) page_addr);
+        if (page != NULL) {
+            if (to_write && !page->writable) {
+                terminate_process();
+            }
+        }
+#endif
+        page_addr += PGSIZE;
     }
 }
 
@@ -201,7 +219,7 @@ static int syscall_filesize(struct thread *t, int fd) {
 }
 
 static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size) {
-    check_user_buffer(buffer, size);
+    check_user_buffer(buffer, size, true);
     
     if (fd < 0) {
         return -1;
@@ -230,7 +248,7 @@ static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size) {
 }
 
 static int syscall_write(struct thread *t, int fd, const char *buffer, unsigned size) {
-    check_user_buffer(buffer, size);
+    check_user_buffer(buffer, size, false);
     
     if (fd < 0) {
         return -1;
@@ -341,6 +359,7 @@ static int syscall_dup2(struct thread *t, int oldfd, int newfd) {
 void
 syscall_handler (struct intr_frame *f) {
     struct thread *t = thread_current();
+    t->user_rsp = f->rsp;
     switch (f->R.rax) {
         // project 2
         case SYS_HALT:

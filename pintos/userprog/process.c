@@ -73,6 +73,7 @@ static void
 initd (void *f_name) {
 #ifdef VM
     supplemental_page_table_init (&thread_current()->spt);
+    thread_current()->user_rsp = NULL;
 #endif
 
     process_init ();
