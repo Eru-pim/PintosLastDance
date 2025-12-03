@@ -51,10 +51,16 @@ syscall_init (void) {
 /* Helper functions */
 static void check_addr(const void *addr) {
     struct thread *curr = thread_current();
-    if (pml4_get_page(curr->pml4, addr) == NULL) {
-        
-    }
     if (addr == NULL || addr >= (void *)KERN_BASE) {
+        curr->exit_num = -1;
+        thread_exit();
+    }
+    if (pml4_get_page(curr->pml4, addr) == NULL){
+        addr = pg_round_down(addr);
+        if(spt_find_page(&curr->spt, addr)){
+            if(vm_claim_page(addr))
+                return;
+        }
         curr->exit_num = -1;
         thread_exit();
     }
@@ -76,6 +82,18 @@ static int get_free_fd(struct thread *t) {
         }
     }
     return -1;
+}
+
+static void check_user_buffer(const char* buffer, unsigned size){
+    char *start = (char *)buffer;
+    char *end = buffer + size;
+
+    for(char *p = start; p < end;){
+        check_addr(p);
+
+        char *next = pg_round_down(p) + PGSIZE;
+        p = next;
+    }
 }
 
 // true if file exist in fd_table
@@ -183,7 +201,7 @@ static int syscall_filesize(struct thread *t, int fd) {
 }
 
 static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size) {
-    check_addr((char *)buffer);
+    check_user_buffer(buffer, size);
     
     if (fd < 0) {
         return -1;
@@ -212,7 +230,7 @@ static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size) {
 }
 
 static int syscall_write(struct thread *t, int fd, const char *buffer, unsigned size) {
-    check_addr((char *)buffer);
+    check_user_buffer(buffer, size);
     
     if (fd < 0) {
         return -1;

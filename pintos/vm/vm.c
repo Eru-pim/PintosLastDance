@@ -274,7 +274,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
                 if (src_aux == NULL || dst_aux == NULL)
                     goto err;
                 if (src_aux->file != NULL)
-                    dst_aux->file = file_duplicate(src_aux->file);
+                    dst_aux->file = file_reopen(src_aux->file);
                 else
                     dst_aux->file = NULL;
                 dst_aux->ofs = src_aux->ofs;
