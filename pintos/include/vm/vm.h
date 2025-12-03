@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdbool.h>
 #include "threads/palloc.h"
+#include "threads/synch.h"
 #include "threads/vaddr.h"
 
 enum vm_type {
@@ -82,6 +83,13 @@ struct page_operations {
     enum vm_type type;
 };
 
+struct lazy_aux {
+    struct file *file;
+    off_t ofs;
+    size_t page_read_bytes;
+    size_t page_zero_bytes;
+};
+
 #define swap_in(page, v) (page)->operations->swap_in ((page), v)
 #define swap_out(page) (page)->operations->swap_out (page)
 #define destroy(page) \
@@ -92,6 +100,7 @@ struct page_operations {
  * All designs up to you for this. */
 struct supplemental_page_table {
     struct hash spt_hash;
+    struct lock spt_lock;
 };
 
 unsigned page_hash(const struct hash_elem *p_, void *aux);

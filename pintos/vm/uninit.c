@@ -50,10 +50,12 @@ uninit_initialize (struct page *page, void *kva) {
     /* Fetch first, page_initialize may overwrite the values */
     vm_initializer *init = uninit->init;
     void *aux = uninit->aux;
+    enum vm_type type = uninit->type;
+    bool (*page_initializer)(struct page *, enum vm_type, void *) = uninit->page_initializer;
 
     /* TODO: You may need to fix this function. */
     return (init ? init (page, aux) : true) && 
-            uninit->page_initializer (page, uninit->type, kva);
+            page_initializer (page, type, kva);
 }
 
 /* Free the resources hold by uninit_page. Although most of pages are transmuted
@@ -62,7 +64,20 @@ uninit_initialize (struct page *page, void *kva) {
  * PAGE will be freed by the caller. */
 static void
 uninit_destroy (struct page *page) {
-    struct uninit_page *uninit UNUSED = &page->uninit;
+    struct uninit_page *uninit = &page->uninit;
     /* TODO: Fill this function.
      * TODO: If you don't have anything to do, just return. */
+    enum vm_type type = VM_TYPE(uninit->type);
+
+    if (type == VM_ANON) {
+        struct lazy_aux *aux = uninit->aux;
+        if (aux) {
+            if (aux->file) {
+                file_close(aux->file);
+            }
+            free(aux);
+        }
+    } else if (type == VM_FILE) {
+        ; // pass
+    }
 }
