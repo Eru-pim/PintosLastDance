@@ -16,8 +16,8 @@
 #include "userprog/syscall.h"
 #include "intrinsic.h"
 
-void syscall_entry (void);
-void syscall_handler (struct intr_frame *);
+void syscall_entry(void);
+void syscall_handler(struct intr_frame *);
 
 /* System call.
  *
@@ -34,41 +34,54 @@ void syscall_handler (struct intr_frame *);
 
 struct lock filesys_lock;
 
-void
-syscall_init (void) {
-    write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48  |
-            ((uint64_t)SEL_KCSEG) << 32);
-    write_msr(MSR_LSTAR, (uint64_t) syscall_entry);
+void syscall_init(void)
+{
+    write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48 |
+                            ((uint64_t)SEL_KCSEG) << 32);
+    write_msr(MSR_LSTAR, (uint64_t)syscall_entry);
 
     /* The interrupt service rountine should not serve any interrupts
      * until the syscall_entry swaps the userland stack to the kernel
      * mode stack. Therefore, we masked the FLAG_FL. */
     write_msr(MSR_SYSCALL_MASK,
-            FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
+              FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
     lock_init(&filesys_lock);
 }
 
 /* Helper functions */
-static void check_addr(const void *addr) {
+static void check_addr(const void *addr)
+{
     struct thread *curr = thread_current();
-    if (addr == NULL || addr >= (void *)KERN_BASE || pml4_get_page(curr->pml4, addr) == NULL) {
+    // TODO vm에서는 pml4_get_page이 null이 될수있음, 하지만 spt에는 있을수있음
+#ifndef VM
+    if (addr == NULL || addr >= (void *)KERN_BASE || pml4_get_page(curr->pml4, addr) == NULL)
+#else
+    if (addr == NULL || is_kernel_vaddr(addr) || spt_find_page(&curr->spt, addr) == NULL)
+#endif
+    {
         curr->exit_num = -1;
         thread_exit();
     }
 }
 
-static int find_idx(struct thread *t, int fd) {
-    for (int idx = 0; idx < MAX_FILE; idx++) {
-        if (t->fd_table[idx].fd == fd) {
+static int find_idx(struct thread *t, int fd)
+{
+    for (int idx = 0; idx < MAX_FILE; idx++)
+    {
+        if (t->fd_table[idx].fd == fd)
+        {
             return idx;
         }
     }
     return -1;
 }
 
-static int get_free_fd(struct thread *t) {
-    for (int fd = 0; fd < MAX_FILE; fd++) {
-        if (!t->fd_status[fd]) {
+static int get_free_fd(struct thread *t)
+{
+    for (int fd = 0; fd < MAX_FILE; fd++)
+    {
+        if (!t->fd_status[fd])
+        {
             return fd;
         }
     }
@@ -76,9 +89,12 @@ static int get_free_fd(struct thread *t) {
 }
 
 // true if file exist in fd_table
-static bool check_file(struct thread *t, struct file *file) {
-    for (int i = 0; i < MAX_FILE; i++) {
-        if (t->fd_table[i].file == file) {
+static bool check_file(struct thread *t, struct file *file)
+{
+    for (int i = 0; i < MAX_FILE; i++)
+    {
+        if (t->fd_table[i].file == file)
+        {
             return true;
         }
     }
@@ -86,29 +102,50 @@ static bool check_file(struct thread *t, struct file *file) {
 }
 
 /* syscall functions */
-static void syscall_halt(void) {
+static void syscall_halt(void)
+{
     power_off();
 }
 
-static void syscall_exit(int status) {
+static void syscall_exit(int status)
+{
     struct thread *t = thread_current();
 
     t->exit_num = status;
     thread_exit();
 }
+static void check_buffer(const void *buffer, unsigned length)
+{
+    if (buffer == NULL)
+        syscall_exit(-1);
+    const uint8_t *start = (const uint8_t *)buffer;
+    const uint8_t *end = start + length - 1;
+    check_addr(start);
+    if (length > 0)
+        check_addr(end);
+
+    for (const uint8_t *p = pg_round_down(start) + PGSIZE; p <= pg_round_down(end); p += PGSIZE)
+    {
+        check_addr(p);
+        volatile uint8_t dummy = *p;
+    }
+}
 
 static tid_t syscall_fork(const char *thread_name,
-                struct intr_frame *f) {
+                          struct intr_frame *f)
+{
     check_addr(thread_name);
 
     return process_fork(thread_name, f);
 }
 
-static void syscall_exec(const char *cmd_line) {
+static void syscall_exec(const char *cmd_line)
+{
     check_addr(cmd_line);
 
     char *fn_copy = palloc_get_page(0);
-    if (fn_copy == NULL) {
+    if (fn_copy == NULL)
+    {
         thread_current()->exit_num = -1;
         thread_exit();
     }
@@ -120,11 +157,13 @@ static void syscall_exec(const char *cmd_line) {
     thread_exit();
 }
 
-static int syscall_wait(tid_t pid) {
+static int syscall_wait(tid_t pid)
+{
     return process_wait(pid);
 }
 
-static bool syscall_create(const char *file, unsigned initial_size) {
+static bool syscall_create(const char *file, unsigned initial_size)
+{
     check_addr(file);
 
     lock_acquire(&filesys_lock);
@@ -133,28 +172,34 @@ static bool syscall_create(const char *file, unsigned initial_size) {
     return success;
 }
 
-static bool syscall_remove(const char *file) {
+static bool syscall_remove(const char *file)
+{
     check_addr(file);
 
     return filesys_remove(file);
 }
 
-static int syscall_open(struct thread *t, const char *file) {
+static int syscall_open(struct thread *t, const char *file)
+{
     check_addr(file);
-    
+
     int idx = find_idx(t, NULL_FD);
     int free_fd = get_free_fd(t);
 
-    if (idx == -1 || free_fd == -1) {
+    if (idx == -1 || free_fd == -1)
+    {
         return -1;
     }
 
     lock_acquire(&filesys_lock);
     struct file *file_ptr = filesys_open(file);
     lock_release(&filesys_lock);
-    if (file_ptr == NULL) {
+    if (file_ptr == NULL)
+    {
         return -1;
-    } else {
+    }
+    else
+    {
         t->fd_table[idx].fd = free_fd;
         t->fd_table[idx].file = file_ptr;
         t->fd_status[free_fd] = true;
@@ -163,43 +208,59 @@ static int syscall_open(struct thread *t, const char *file) {
     return free_fd;
 }
 
-static int syscall_filesize(struct thread *t, int fd) {
-    if (fd < 0) {
+static int syscall_filesize(struct thread *t, int fd)
+{
+    if (fd < 0)
+    {
         return -1;
     }
-    
+
     int idx = find_idx(t, fd);
 
-    if (idx == -1) {
+    if (idx == -1)
+    {
         return -1;
-    } else if (t->fd_table[idx].file <= STDOUT_FILE) {
+    }
+    else if (t->fd_table[idx].file <= STDOUT_FILE)
+    {
         return -1;
-    } else {
+    }
+    else
+    {
         return (int)file_length(t->fd_table[idx].file);
     }
 }
 
-static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size) {
-    check_addr((char *)buffer);
-    
-    if (fd < 0) {
+static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size)
+{
+    check_buffer(buffer, size);
+    // check_addr((char *)buffer);
+
+    if (fd < 0)
+    {
         return -1;
     }
 
     int idx = find_idx(t, fd);
     int bytes_read = -1;
 
-    if (idx == -1 || t->fd_table[idx].file == STDOUT_FILE) {
+    if (idx == -1 || t->fd_table[idx].file == STDOUT_FILE)
+    {
         return -1;
-    } else if (t->fd_table[idx].file == STDIN_FILE) {
+    }
+    else if (t->fd_table[idx].file == STDIN_FILE)
+    {
         lock_acquire(&filesys_lock);
-        for (unsigned i = 0; i < size; i++) {
+        for (unsigned i = 0; i < size; i++)
+        {
             *buffer = input_getc();
             buffer++;
         }
         bytes_read = size;
         lock_release(&filesys_lock);
-    } else {
+    }
+    else
+    {
         lock_acquire(&filesys_lock);
         bytes_read = (int)file_read(t->fd_table[idx].file, buffer, size);
         lock_release(&filesys_lock);
@@ -208,22 +269,30 @@ static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size) {
     return bytes_read;
 }
 
-static int syscall_write(struct thread *t, int fd, const char *buffer, unsigned size) {
-    check_addr((char *)buffer);
-    
-    if (fd < 0) {
+static int syscall_write(struct thread *t, int fd, const char *buffer, unsigned size)
+{
+    // check_addr((char *)buffer);
+    check_buffer(buffer, size);
+
+    if (fd < 0)
+    {
         return -1;
     }
 
     int idx = find_idx(t, fd);
     int bytes_written = -1;
 
-    if (idx == -1 || t->fd_table[idx].file == STDIN_FILE) {
+    if (idx == -1 || t->fd_table[idx].file == STDIN_FILE)
+    {
         return -1;
-    } else if (t->fd_table[idx].file == STDOUT_FILE) {
+    }
+    else if (t->fd_table[idx].file == STDOUT_FILE)
+    {
         putbuf((char *)buffer, size);
         bytes_written = size;
-    } else {
+    }
+    else
+    {
         lock_acquire(&filesys_lock);
         bytes_written = (int)file_write(t->fd_table[idx].file, buffer, size);
         lock_release(&filesys_lock);
@@ -232,59 +301,76 @@ static int syscall_write(struct thread *t, int fd, const char *buffer, unsigned 
     return bytes_written;
 }
 
-static void syscall_seek(struct thread *t, int fd, unsigned position) {
-    if (fd < 0) {
+static void syscall_seek(struct thread *t, int fd, unsigned position)
+{
+    if (fd < 0)
+    {
         return;
     }
 
     int idx = find_idx(t, fd);
 
-    if (idx == -1 || t->fd_table[idx].file <= STDOUT_FILE) {
+    if (idx == -1 || t->fd_table[idx].file <= STDOUT_FILE)
+    {
         ;
-    } else {
+    }
+    else
+    {
         file_seek(t->fd_table[idx].file, position);
     }
 }
 
-static unsigned syscall_tell(struct thread *t, int fd) {
-    if (fd < 0) {
+static unsigned syscall_tell(struct thread *t, int fd)
+{
+    if (fd < 0)
+    {
         return 0;
     }
 
     int idx = find_idx(t, fd);
 
-    if (idx == -1 || t->fd_table[idx].file <= STDOUT_FILE) {
+    if (idx == -1 || t->fd_table[idx].file <= STDOUT_FILE)
+    {
         return 0;
-    } else {
+    }
+    else
+    {
         return file_tell(t->fd_table[idx].file);
     }
 }
 
-static void syscall_close(struct thread *t, int fd) {
-    if (fd < 0) {
-        return ;
+static void syscall_close(struct thread *t, int fd)
+{
+    if (fd < 0)
+    {
+        return;
     }
 
     int idx = find_idx(t, fd);
 
-    if (idx == -1) {
+    if (idx == -1)
+    {
         return;
     }
 
     struct file *file = t->fd_table[idx].file;
     t->fd_table[idx].fd = NULL_FD;
     t->fd_table[idx].file = NULL;
-    if (fd >= 0 && fd < MAX_FILE) {
+    if (fd >= 0 && fd < MAX_FILE)
+    {
         t->fd_status[fd] = false;
     }
 
-    if (file > STDOUT_FILE && !check_file(t, file)) {
+    if (file > STDOUT_FILE && !check_file(t, file))
+    {
         file_close(file);
     }
 }
 
-static int syscall_dup2(struct thread *t, int oldfd, int newfd) {
-    if (oldfd < 0 || newfd < 0) {
+static int syscall_dup2(struct thread *t, int oldfd, int newfd)
+{
+    if (oldfd < 0 || newfd < 0)
+    {
         return -1;
     }
 
@@ -293,20 +379,29 @@ static int syscall_dup2(struct thread *t, int oldfd, int newfd) {
     int free_fd = get_free_fd(t);
     struct file *file;
 
-    if (old_idx == -1) {
+    if (old_idx == -1)
+    {
         return -1;
-    } else if (oldfd == newfd) {
+    }
+    else if (oldfd == newfd)
+    {
         return newfd;
-    } else if (new_idx == -1) {
+    }
+    else if (new_idx == -1)
+    {
         t->fd_table[free_fd].fd = newfd;
         t->fd_table[free_fd].file = t->fd_table[old_idx].file;
         t->fd_status[free_fd] = true;
         return newfd;
-    } else {
-        if (t->fd_table[new_idx].file > STDOUT_FILE) {
+    }
+    else
+    {
+        if (t->fd_table[new_idx].file > STDOUT_FILE)
+        {
             file = t->fd_table[new_idx].file;
             t->fd_table[new_idx].file = NULL;
-            if (!check_file(t, file)) {
+            if (!check_file(t, file))
+            {
                 file_close(file);
             }
         }
@@ -317,76 +412,77 @@ static int syscall_dup2(struct thread *t, int oldfd, int newfd) {
 
 /* Arguments order: %rdi, %rsi, %rdx, %r10, %r8, %r9 */
 /* The main system call interface */
-void
-syscall_handler (struct intr_frame *f) {
+void syscall_handler(struct intr_frame *f)
+{
     struct thread *t = thread_current();
-    switch (f->R.rax) {
-        // project 2
-        case SYS_HALT:
-            syscall_halt();
-            NOT_REACHED();
-            break;
+    switch (f->R.rax)
+    {
+    // project 2
+    case SYS_HALT:
+        syscall_halt();
+        NOT_REACHED();
+        break;
 
-        case SYS_EXIT:
-            syscall_exit((int)f->R.rdi);
-            NOT_REACHED();
-            break;
-        
-        case SYS_FORK:
-            f->R.rax = syscall_fork((char *)f->R.rdi, f);
-            break;
+    case SYS_EXIT:
+        syscall_exit((int)f->R.rdi);
+        NOT_REACHED();
+        break;
 
-        case SYS_EXEC:
-            syscall_exec((char *)f->R.rdi);
-            NOT_REACHED();
-            break;
-        
-        case SYS_WAIT:
-            f->R.rax = syscall_wait((tid_t)f->R.rdi);
-            break;
-        
-        case SYS_CREATE:
-            f->R.rax = syscall_create((char *)f->R.rdi, (unsigned)f->R.rsi);
-            break;
+    case SYS_FORK:
+        f->R.rax = syscall_fork((char *)f->R.rdi, f);
+        break;
 
-        case SYS_REMOVE:
-            f->R.rax = syscall_remove((char *)f->R.rdi);
-            break;
+    case SYS_EXEC:
+        syscall_exec((char *)f->R.rdi);
+        NOT_REACHED();
+        break;
 
-        case SYS_OPEN:
-            f->R.rax = syscall_open(t, (char *)f->R.rdi);
-            break;
-        
-        case SYS_FILESIZE:
-            f->R.rax = syscall_filesize(t, (int)f->R.rdi);
-            break;
+    case SYS_WAIT:
+        f->R.rax = syscall_wait((tid_t)f->R.rdi);
+        break;
 
-        case SYS_READ:
-            f->R.rax = syscall_read(t, (int)f->R.rdi, (char *)f->R.rsi, (unsigned)f->R.rdx);
-            break;
+    case SYS_CREATE:
+        f->R.rax = syscall_create((char *)f->R.rdi, (unsigned)f->R.rsi);
+        break;
 
-        case SYS_WRITE:
-            f->R.rax = syscall_write(t, (int)f->R.rdi, (char *)f->R.rsi, (unsigned)f->R.rdx);
-            break;
-        
-        case SYS_SEEK:
-            syscall_seek(t, (int)f->R.rdi, (unsigned)f->R.rsi);
-            break;
+    case SYS_REMOVE:
+        f->R.rax = syscall_remove((char *)f->R.rdi);
+        break;
 
-        case SYS_TELL:
-            f->R.rax = syscall_tell(t, (int)f->R.rdi);
-            break;
-        
-        case SYS_CLOSE:
-            syscall_close(t, (int)f->R.rdi);
-            break;
-        
-        // project 2 EXTRA
-        case SYS_DUP2:
-            f->R.rax = syscall_dup2(t, (int)f->R.rdi, (int)f->R.rsi);
-            break;
-        
-        default:
-            NOT_REACHED();
+    case SYS_OPEN:
+        f->R.rax = syscall_open(t, (char *)f->R.rdi);
+        break;
+
+    case SYS_FILESIZE:
+        f->R.rax = syscall_filesize(t, (int)f->R.rdi);
+        break;
+
+    case SYS_READ:
+        f->R.rax = syscall_read(t, (int)f->R.rdi, (char *)f->R.rsi, (unsigned)f->R.rdx);
+        break;
+
+    case SYS_WRITE:
+        f->R.rax = syscall_write(t, (int)f->R.rdi, (char *)f->R.rsi, (unsigned)f->R.rdx);
+        break;
+
+    case SYS_SEEK:
+        syscall_seek(t, (int)f->R.rdi, (unsigned)f->R.rsi);
+        break;
+
+    case SYS_TELL:
+        f->R.rax = syscall_tell(t, (int)f->R.rdi);
+        break;
+
+    case SYS_CLOSE:
+        syscall_close(t, (int)f->R.rdi);
+        break;
+
+    // project 2 EXTRA
+    case SYS_DUP2:
+        f->R.rax = syscall_dup2(t, (int)f->R.rdi, (int)f->R.rsi);
+        break;
+
+    default:
+        NOT_REACHED();
     }
 }

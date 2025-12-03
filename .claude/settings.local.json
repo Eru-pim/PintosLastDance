@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(cat:*)",
+      "Bash(pintos:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
