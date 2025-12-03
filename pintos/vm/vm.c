@@ -195,12 +195,23 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
     page = spt_find_page(spt, addr);
     if (page == NULL) {
         void *rsp = f->rsp;
+        void *fault_page = pg_round_down(addr);
         
         if (addr < USER_STACK &&
             addr >= rsp - 8 &&
-            ((void *)USER_STACK - addr) <= (1 << 20)) {
+            (((void *)USER_STACK - fault_page)) <= (1 << 20)) {
+            
+            for (void *page_addr = fault_page;
+                 page_addr < USER_STACK;
+                 page_addr += PGSIZE) {
                 
-            return vm_stack_growth(addr);
+                if (spt_find_page(spt, page_addr) != NULL)
+                    continue;
+                
+                if (!vm_stack_growth(page_addr))
+                    return false;
+            }
+            return true;
         }
         return false;
     }

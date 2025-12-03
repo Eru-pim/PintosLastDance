@@ -70,11 +70,29 @@ static void check_addr(const void *addr) {
 #endif /* VM */
 }
 
-static void check_buffer(const void *buffer, unsigned size) {
-    for (const void *addr = pg_round_down(buffer);
+static void check_buffer(void *buffer, unsigned size, bool check_writable) {
+    struct thread *curr = thread_current();
+    struct supplemental_page_table *spt = &curr->spt;
+    
+    for (void *addr = pg_round_down(buffer);
          addr < buffer + size;
          addr += PGSIZE) {
-        check_addr(addr);
+        
+        if (addr == NULL || is_kernel_vaddr(addr)) {
+            curr->exit_num = -1;
+            thread_exit();
+        }
+        
+        struct page *page = spt_find_page(spt, addr);
+        if (page == NULL) {
+            curr->exit_num = -1;
+            thread_exit();
+        }
+
+        if (check_writable && !page->writable) {
+            curr->exit_num = -1;
+            thread_exit();
+        }
     }
 }
 
@@ -201,7 +219,7 @@ static int syscall_filesize(struct thread *t, int fd) {
 }
 
 static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size) {
-    check_buffer(buffer, size);
+    check_buffer(buffer, size, true);
     
     if (fd < 0) {
         return -1;
@@ -230,7 +248,7 @@ static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size) {
 }
 
 static int syscall_write(struct thread *t, int fd, const char *buffer, unsigned size) {
-    check_buffer(buffer, size);
+    check_buffer(buffer, size, false);
     
     if (fd < 0) {
         return -1;
