@@ -62,7 +62,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
     } else if (VM_TYPE(type) == VM_FILE) {
         initializer = file_backed_initializer;
     } else {
-        PANIC("asdf");
+        PANIC("TODO");
     }
 
     struct supplemental_page_table *spt = &thread_current ()->spt;
@@ -113,13 +113,15 @@ spt_insert_page (struct supplemental_page_table *spt,
                  struct page *page) {
     ASSERT(spt != NULL);
     /* TODO: Fill this function. */
-    return(hash_insert(&spt->spt_hash, &page->hash_elem) == NULL);
+    lock_acquire(&spt->spt_lock);
+    bool success = (hash_insert(&spt->spt_hash, &page->hash_elem) == NULL);
+    lock_release(&spt->spt_lock);
+    return success;
 }
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
     vm_dealloc_page (page);
-    return true;
 }
 
 /* Get the struct frame, that will be evicted. */
@@ -127,7 +129,7 @@ static struct frame *
 vm_get_victim (void) {
     struct frame *victim = NULL;
      /* TODO: The policy for eviction is up to you. */
-
+    PANIC("TODO");
     return victim;
 }
 
@@ -137,7 +139,7 @@ static struct frame *
 vm_evict_frame (void) {
     struct frame *victim UNUSED = vm_get_victim ();
     /* TODO: swap out the victim and return the evicted frame. */
-
+    PANIC("TODO");
     return NULL;
 }
 
@@ -157,7 +159,9 @@ vm_get_frame (void) {
         frame->page = NULL;
     } else {
         frame->page = NULL;
+        lock_acquire(&frame_lock);
         list_push_back(&frame_table, &frame->elem);
+        lock_release(&frame_lock);
     }
 
     ASSERT (frame != NULL);
@@ -168,6 +172,7 @@ vm_get_frame (void) {
 /* Growing the stack. */
 static bool
 vm_stack_growth (void *addr) {
+    struct thread *t = thread_current();
     void *page_addr = pg_round_down(addr);
     if (!vm_alloc_page(VM_ANON | VM_MARKER_0, page_addr, true)) {
         return false;
@@ -184,43 +189,44 @@ vm_handle_wp (struct page *page UNUSED) {
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
                      bool user, bool write, bool not_present) {
-    struct supplemental_page_table *spt = &thread_current()->spt;
+    struct thread *curr = thread_current();
+    struct supplemental_page_table *spt = &curr->spt;
     struct page *page;
+    uintptr_t rsp;
     /* TODO: Validate the fault */
     /* TODO: Your code goes here */
     if (addr == NULL || is_kernel_vaddr(addr)) {
         return false;
     }
 
+    if (!not_present) {
+        return false;
+    }
+
+    if (user) {
+        rsp = f->rsp;
+    } else {
+        rsp = curr->user_rsp;
+    }
+    
     page = spt_find_page(spt, addr);
-    if (page == NULL) {
-        void *rsp = f->rsp;
-        void *fault_page = pg_round_down(addr);
-        
-        if (addr < USER_STACK &&
-            addr >= rsp - 8 &&
-            (((void *)USER_STACK - fault_page)) <= (1 << 20)) {
-            
-            for (void *page_addr = fault_page;
-                 page_addr < USER_STACK;
-                 page_addr += PGSIZE) {
-                
-                if (spt_find_page(spt, page_addr) != NULL)
-                    continue;
-                
-                if (!vm_stack_growth(page_addr))
-                    return false;
-            }
-            return true;
+    if (page) {
+        if (write && !page->writable) {
+            return false;
         }
-        return false;
+        return vm_do_claim_page(page);
     }
 
-    if (write && !page->writable) {
-        return false;
+    void *fault_page = pg_round_down(addr);
+    void *stack_bottom = USER_STACK - (1 << 20);
+
+    if (addr >= (void *)(rsp - 8) && 
+        fault_page >= stack_bottom && 
+        fault_page < (void *)USER_STACK) {
+        return vm_stack_growth(addr);
     }
 
-    return vm_do_claim_page (page);
+    return false;
 }
 
 /* Free the page.
@@ -254,9 +260,24 @@ vm_do_claim_page (struct page *page) {
 
     /* TODO: Insert page table entry to map page's VA to frame's PA. */
     if (!pml4_set_page(curr->pml4, page->va, frame->kva, page->writable)) {
-        return false;
+        goto err;
     }
-    return swap_in (page, frame->kva);
+
+    if (!swap_in (page, frame->kva)) {
+        goto err;
+    }
+
+    return true;
+
+err:
+    lock_acquire(&frame_lock);
+    list_remove(&frame->elem);
+    palloc_free_page(frame->kva);
+    free(frame);
+    page->frame = NULL;
+    lock_release(&frame_lock);
+
+    return false;
 }
 
 unsigned page_hash(const struct hash_elem *p_, void *aux UNUSED) {
@@ -302,21 +323,18 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
                     goto err;
                 }
 
-                dst_aux->file = file_duplicate(src_aux->file);
+                dst_aux->file = file_reopen(src_aux->file);
                 dst_aux->ofs = src_aux->ofs;
                 dst_aux->page_read_bytes = src_aux->page_read_bytes;
                 dst_aux->page_zero_bytes = src_aux->page_zero_bytes;
             }
 
-            if (!vm_alloc_page_with_initializer(page_get_type(src_page), src_page->va,
+            if (!vm_alloc_page_with_initializer(uninit->type, src_page->va,
                                                 src_page->writable, uninit->init, dst_aux)) {
                 goto err;
             }
-
-            if (!vm_claim_page(src_page->va))
-                goto err;
-        } else {
-            if (!vm_alloc_page(page_get_type(src_page), src_page->va, src_page->writable)) {
+        } else if (VM_TYPE(src_page->operations->type) == VM_ANON) {
+            if (!vm_alloc_page(src_page->operations->type, src_page->va, src_page->writable)) {
                 goto err;
             }
 

@@ -61,12 +61,6 @@ static void check_addr(const void *addr) {
         curr->exit_num = -1;
         thread_exit();
     }
-
-    struct page *page = spt_find_page(&curr->spt, addr);
-    if (page == NULL) {
-        curr->exit_num = -1;
-        thread_exit();
-    }
 #endif /* VM */
 }
 
@@ -74,6 +68,18 @@ static void check_buffer(void *buffer, unsigned size, bool check_writable) {
     struct thread *curr = thread_current();
     struct supplemental_page_table *spt = &curr->spt;
     
+    if (size == 0) {
+        return;
+    }
+
+    check_addr(buffer);
+
+    uintptr_t end = (uintptr_t)buffer + size;
+    if (end < (uintptr_t)buffer) {
+        curr->exit_num = -1;
+        thread_exit();
+    }
+
     for (void *addr = pg_round_down(buffer);
          addr < buffer + size;
          addr += PGSIZE) {
@@ -84,12 +90,7 @@ static void check_buffer(void *buffer, unsigned size, bool check_writable) {
         }
         
         struct page *page = spt_find_page(spt, addr);
-        if (page == NULL) {
-            curr->exit_num = -1;
-            thread_exit();
-        }
-
-        if (check_writable && !page->writable) {
+        if (page != NULL && check_writable && !page->writable) {
             curr->exit_num = -1;
             thread_exit();
         }
@@ -359,6 +360,7 @@ static int syscall_dup2(struct thread *t, int oldfd, int newfd) {
 void
 syscall_handler (struct intr_frame *f) {
     struct thread *t = thread_current();
+    t->user_rsp = f->rsp;
     switch (f->R.rax) {
         // project 2
         case SYS_HALT:

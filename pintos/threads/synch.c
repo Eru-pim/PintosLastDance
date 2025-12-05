@@ -410,7 +410,7 @@ donation_priority (void)
 	int priority = curr->priority;
 	for (int i = 0; i < 8; i++)
 	{
-		if (curr->lock_on_wait == NULL)
+		if (curr->lock_on_wait == NULL || curr->lock_on_wait->holder == NULL)
 			return;
 		holder = curr->lock_on_wait->holder;
 		holder->priority = priority;
