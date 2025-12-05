@@ -178,7 +178,7 @@ __do_fork(void *aux)
     struct intr_frame if_;
     struct thread *parent = (struct thread *)aux;
     struct thread *current = thread_current();
-    /* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
+    /* somehow pass the parent_if. (i.e. process_fork()'s if_) */
     struct intr_frame *parent_if = &parent->tf_fork;
     bool succ = true;
 
@@ -195,6 +195,7 @@ __do_fork(void *aux)
     }
     process_activate(current);
 #ifdef VM
+
     supplemental_page_table_init(&current->spt);
     if (!supplemental_page_table_copy(&current->spt, &parent->spt))
         goto error;
@@ -645,6 +646,8 @@ done:
     palloc_free_page(file_name_cp);
     if (file != NULL)
     {
+        // if (parent->exec_file != NULL)
+        //     current->exec_file = file_duplicate(parent->exec_file);
         file_deny_write(file);
         t->exec_file = file;
     }
@@ -817,14 +820,23 @@ lazy_load_segment(struct page *page, void *aux)
                info, info ? info->file : NULL);
         return false;
     }
-
+    // NOTE sync-read 정답
+    // bool need_lock = !lock_held_by_current_thread(&filesys_lock);
+    // if (need_lock)
+    //     lock_acquire(&filesys_lock);
+    // lock_acquire(&filesys_lock);
     /* Load the segment from the file */
     file_seek(info->file, info->ofs);
     if (file_read(info->file, page->frame->kva, info->read_bytes) != (off_t)info->read_bytes)
     {
         free(info);
+        // if (need_lock)
+        //     lock_release(&filesys_lock);
+
         return false;
     }
+    // if (need_lock)
+    //     lock_release(&filesys_lock);
     memset(page->frame->kva + info->read_bytes, 0, info->zero_bytes);
     free(info);
     return true;
@@ -904,12 +916,7 @@ setup_stack(struct intr_frame *if_)
     // If success, set the rsp accordingly.
     if_->rsp = USER_STACK;
     success = true;
-    // TODO maybe set up page table setting
 
-    // You should mark the page is stack. */
-    // TODO add: create vm_entry of 4KB stack
-    // TODO initialize created vm_entry field value
-    // TODO insert vm hash table
     return success;
 }
 #endif /* VM */

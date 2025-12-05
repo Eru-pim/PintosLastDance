@@ -3,7 +3,8 @@
     "allow": [
       "Bash(make:*)",
       "Bash(cat:*)",
-      "Bash(pintos:*)"
+      "Bash(pintos:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

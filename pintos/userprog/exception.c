@@ -146,6 +146,11 @@ page_fault(struct intr_frame *f)
 	/* For project 3 and later. */
 	if (vm_try_handle_fault(f, fault_addr, user, write, not_present))
 		return;
+	if (user || is_user_vaddr(fault_addr))
+	{
+		thread_current()->exit_num = -1;
+		thread_exit();
+	}
 #endif
 
 	/* Count page faults. */

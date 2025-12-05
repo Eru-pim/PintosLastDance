@@ -46,6 +46,7 @@ struct inode
 static disk_sector_t
 byte_to_sector(const struct inode *inode, off_t pos)
 {
+
 	ASSERT(inode != NULL);
 	if (pos < inode->data.length)
 		return inode->data.start + pos / DISK_SECTOR_SIZE;
@@ -195,6 +196,7 @@ void inode_remove(struct inode *inode)
  * than SIZE if an error occurs or end of file is reached. */
 off_t inode_read_at(struct inode *inode, void *buffer_, off_t size, off_t offset)
 {
+
 	uint8_t *buffer = buffer_;
 	off_t bytes_read = 0;
 	uint8_t *bounce = NULL;

@@ -26,6 +26,8 @@ enum vm_type
     VM_MARKER_END = (1 << 31),
 };
 
+#define MAX_STACK_SIZE (1 << 20)
+
 #include "vm/uninit.h"
 #include "vm/anon.h"
 #include "vm/file.h"

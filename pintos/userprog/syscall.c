@@ -11,10 +11,14 @@
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
 #include "userprog/gdt.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 #include "intrinsic.h"
+#ifdef VM
+#include "vm/vm.h"
+#endif
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
@@ -52,11 +56,10 @@ void syscall_init(void)
 static void check_addr(const void *addr)
 {
     struct thread *curr = thread_current();
-    // TODO vm에서는 pml4_get_page이 null이 될수있음, 하지만 spt에는 있을수있음
 #ifndef VM
     if (addr == NULL || addr >= (void *)KERN_BASE || pml4_get_page(curr->pml4, addr) == NULL)
 #else
-    if (addr == NULL || is_kernel_vaddr(addr) || spt_find_page(&curr->spt, addr) == NULL)
+    if (addr == NULL || is_kernel_vaddr(addr))
 #endif
     {
         curr->exit_num = -1;
@@ -114,22 +117,214 @@ static void syscall_exit(int status)
     t->exit_num = status;
     thread_exit();
 }
-static void check_buffer(const void *buffer, unsigned length)
-{
-    if (buffer == NULL)
-        syscall_exit(-1);
-    const uint8_t *start = (const uint8_t *)buffer;
-    const uint8_t *end = start + length - 1;
-    check_addr(start);
-    if (length > 0)
-        check_addr(end);
 
-    for (const uint8_t *p = pg_round_down(start) + PGSIZE; p <= pg_round_down(end); p += PGSIZE)
+static void
+check_user_buffer(const void *buffer, unsigned size, bool to_write)
+{
+    if (size == 0)
     {
-        check_addr(p);
-        volatile uint8_t dummy = *p;
+        return;
+    }
+
+    check_addr(buffer);
+
+    uintptr_t start = (uintptr_t)buffer;
+    uintptr_t end = start + size;
+    if (end < start)
+    {
+        thread_current()->exit_num = -1;
+        thread_exit();
+    }
+
+    uintptr_t page_addr = (uintptr_t)pg_round_down((void *)start);
+    while (page_addr < end)
+    {
+        check_addr((void *)page_addr);
+#ifdef VM
+        struct page *page = spt_find_page(&thread_current()->spt, (void *)page_addr);
+        if (page != NULL)
+        {
+            if (to_write && !page->is_page_writable)
+                1
+                {
+                    thread_current()->exit_num = -1;
+                    thread_exit();
+                }
+        }
+        // else
+        // {
+        //     thread_current()->exit_num = -1;
+        //     thread_exit();
+        // }
+        // volatile uintptr_t dummy = *page_addr;
+#endif
+
+        page_addr += PGSIZE;
     }
 }
+// Validate buffer for read operations (buffer must be writable)
+// static void check_buffer_writable(void *buffer, unsigned length)
+// {
+//     if (buffer == NULL)
+//     {
+//         thread_current()->exit_num = -1;
+//         thread_exit();
+//     }
+
+//     // If length is 0, no validation needed
+//     if (length == 0)
+//         return;
+
+//     // Check start and end addresses
+//     if (is_kernel_vaddr(buffer) || is_kernel_vaddr((char *)buffer + length - 1))
+//     {
+//         thread_current()->exit_num = -1;
+//         thread_exit();
+//     }
+
+//     // Check each page in the buffer range
+//     for (void *upage = pg_round_down(buffer);
+//          upage <= pg_round_down((char *)buffer + length - 1);
+//          upage += PGSIZE)
+//     {
+//         if (is_kernel_vaddr(upage))
+//         {
+//             thread_current()->exit_num = -1;
+//             thread_exit();
+//         }
+
+// #ifdef VM
+//         struct page *page = spt_find_page(&thread_current()->spt, upage);
+//         if (page != NULL)
+//         {
+//             // Page exists in SPT
+//             if (!page->is_page_writable)
+//             {
+//                 thread_current()->exit_num = -1;
+//                 thread_exit();
+//             }
+//             if (!vm_claim_page(upage))
+//             {
+//                 thread_current()->exit_num = -1;
+//                 thread_exit();
+//             }
+//         }
+//         else
+//         {
+//             // Page doesn't exist in SPT
+//             // Check if it's in valid stack range and allocate it
+//             if ((uintptr_t)upage < USER_STACK &&
+//                 (uintptr_t)upage >= USER_STACK - MAX_STACK_SIZE)
+//             {
+//                 // Allocate and claim the stack page
+//                 if (!vm_alloc_page(VM_ANON, upage, true))
+//                 {
+//                     thread_current()->exit_num = -1;
+//                     thread_exit();
+//                 }
+//                 if (!vm_claim_page(upage))
+//                 {
+//                     thread_current()->exit_num = -1;
+//                     thread_exit();
+//                 }
+//             }
+//             else
+//             {
+//                 // Not in valid range
+//                 thread_current()->exit_num = -1;
+//                 thread_exit();
+//             }
+//         }
+// #else
+//         if (pml4_get_page(thread_current()->pml4, upage) == NULL)
+//         {
+//             thread_current()->exit_num = -1;
+//             thread_exit();
+//         }
+// #endif
+//     }
+// }
+
+// // Validate buffer for write operations (buffer must be readable)
+// static void check_buffer_readable(const void *buffer, unsigned length)
+// {
+//     if (buffer == NULL)
+//     {
+//         thread_current()->exit_num = -1;
+//         thread_exit();
+//     }
+
+//     // If length is 0, no validation needed
+//     if (length == 0)
+//         return;
+
+//     // Check start and end addresses
+//     if (is_kernel_vaddr(buffer) || is_kernel_vaddr((char *)buffer + length - 1))
+//     {
+//         thread_current()->exit_num = -1;
+//         thread_exit();
+//     }
+
+//     // Check each page in the buffer range
+//     for (const void *upage = pg_round_down(buffer);
+//          upage <= pg_round_down((const char *)buffer + length - 1);
+//          upage += PGSIZE)
+//     {
+//         // Check if address is in kernel space
+//         if (is_kernel_vaddr(upage))
+//         {
+//             thread_current()->exit_num = -1;
+//             thread_exit();
+//         }
+
+// #ifdef VM
+//         // In VM mode, check if page exists in SPT
+//         struct page *page = spt_find_page(&thread_current()->spt, (void *)upage);
+//         if (page != NULL)
+//         {
+//             // Load the page into memory if not already loaded
+//             if (!vm_claim_page((void *)upage))
+//             {
+//                 thread_current()->exit_num = -1;
+//                 thread_exit();
+//             }
+//         }
+//         else
+//         {
+//             // Page doesn't exist in SPT
+//             // Check if it's in valid stack range and allocate it
+//             if ((uintptr_t)upage < USER_STACK &&
+//                 (uintptr_t)upage >= USER_STACK - MAX_STACK_SIZE)
+//             {
+//                 // Allocate and claim the stack page
+//                 if (!vm_alloc_page(VM_ANON, upage, true))
+//                 {
+//                     thread_current()->exit_num = -1;
+//                     thread_exit();
+//                 }
+//                 if (!vm_claim_page(upage))
+//                 {
+//                     thread_current()->exit_num = -1;
+//                     thread_exit();
+//                 }
+//             }
+//             else
+//             {
+//                 // Not in valid range
+//                 thread_current()->exit_num = -1;
+//                 thread_exit();
+//             }
+//         }
+// #else
+//         // In non-VM mode, check page table
+//         if (pml4_get_page(thread_current()->pml4, (void *)upage) == NULL)
+//         {
+//             thread_current()->exit_num = -1;
+//             thread_exit();
+//         }
+// #endif
+//     }
+// }
 
 static tid_t syscall_fork(const char *thread_name,
                           struct intr_frame *f)
@@ -233,8 +428,8 @@ static int syscall_filesize(struct thread *t, int fd)
 
 static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size)
 {
-    check_buffer(buffer, size);
-    // check_addr((char *)buffer);
+    // For read(), buffer must be writable
+    check_user_buffer(buffer, size, true);
 
     if (fd < 0)
     {
@@ -271,8 +466,8 @@ static int syscall_read(struct thread *t, int fd, char *buffer, unsigned size)
 
 static int syscall_write(struct thread *t, int fd, const char *buffer, unsigned size)
 {
-    // check_addr((char *)buffer);
-    check_buffer(buffer, size);
+    // For write(), buffer must be readable
+    check_user_buffer(buffer, size, false);
 
     if (fd < 0)
     {
@@ -415,6 +610,7 @@ static int syscall_dup2(struct thread *t, int oldfd, int newfd)
 void syscall_handler(struct intr_frame *f)
 {
     struct thread *t = thread_current();
+    t->user_rsp = f->rsp;
     switch (f->R.rax)
     {
     // project 2
