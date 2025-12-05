@@ -74,6 +74,7 @@ initd (void *f_name) {
 #ifdef VM
     supplemental_page_table_init (&thread_current()->spt);
     thread_current()->user_rsp = NULL;
+    hash_init(&thread_current()->mmu_hash_list, page_hash, page_less, NULL);
 #endif
 
     process_init ();
@@ -781,9 +782,14 @@ lazy_load_segment (struct page *page, void *aux) {
 
     uint8_t *kpage = page->frame->kva;
     
+    lock_acquire(&filesys_lock);
     file_seek(file, ofs);
-    if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
+    int bytes = file_read(file, kpage, page_read_bytes);
+    lock_release(&filesys_lock);
+
+    if (bytes != (int)page_read_bytes)
         return false;
+    
     memset(kpage+page_read_bytes, 0, page_zero_bytes);
     
     free(aux);

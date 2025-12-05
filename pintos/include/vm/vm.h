@@ -120,5 +120,6 @@ enum vm_type page_get_type (struct page *page);
 unsigned page_hash(const struct hash_elem *p_, void *aux);
 bool page_less(const struct hash_elem *a_, const struct hash_elem *b_, void *aux);
 struct page *page_lookup(const struct supplemental_page_table *spt, const void *address);
+struct mmu *mmu_lookup(const struct hash *hash_table, const void *addr);                                                     
 
 #endif  /* VM_VM_H */

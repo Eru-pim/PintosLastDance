@@ -116,7 +116,6 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
     vm_dealloc_page (page);
-    return true;
 }
 
 /* Get the struct frame, that will be evicted. */
@@ -341,11 +340,10 @@ void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
     /* TODO: Destroy all the supplemental_page_table hold by thread and
      * TODO: writeback all the modified contents to the storage. */
-    // 이거 넣으면 바로 문제 일어남
     hash_destroy(&spt->hash_table, page_destructor);
 }
 
-static void // 타입별로 따로 처리해줘야 함. writeback은 일단 나중에
+static void
 page_destructor(struct hash_elem *e, void *aux UNUSED){
     struct page *page = hash_entry(e, struct page, hash_elem);
     vm_dealloc_page(page);
@@ -378,4 +376,16 @@ page_lookup (const struct supplemental_page_table *spt, const void *address) {
     p.va = (void *) address;
     e = hash_find (&spt->hash_table, &p.hash_elem);
     return e != NULL ? hash_entry (e, struct page, hash_elem) : NULL;
+}
+
+/* Returns the mmu containing the given virtual address, or NULL. */
+struct mmu *
+mmu_lookup(const struct hash *hash_table, const void *addr){
+    struct mmu m;
+    struct hash_elem *e;
+
+    addr = pg_round_down(addr);
+    m.start = (void *)addr;
+    e = hash_find(hash_table, &m.hash_elem);
+    return e != NULL ? hash_entry(e, struct mmu, hash_elem) : NULL;
 }

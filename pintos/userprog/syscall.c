@@ -354,6 +354,17 @@ static int syscall_dup2(struct thread *t, int oldfd, int newfd) {
     }
 }
 
+static void *syscall_mmap (struct thread *t, void *addr, size_t length, int writable, int fd, off_t offset){
+    int idx = find_idx(t, fd);
+    struct file *file = t->fd_table[idx].file;
+    
+    return do_mmap(addr, length, writable, file, offset);
+}
+
+static void syscall_munmap (void *addr){
+    do_munmap(addr);
+}
+
 /* Arguments order: %rdi, %rsi, %rdx, %r10, %r8, %r9 */
 /* The main system call interface */
 void
@@ -424,6 +435,14 @@ syscall_handler (struct intr_frame *f) {
         // project 2 EXTRA
         case SYS_DUP2:
             f->R.rax = syscall_dup2(t, (int)f->R.rdi, (int)f->R.rsi);
+            break;
+
+        case SYS_MMAP:
+            f->R.rax = syscall_mmap(t, (void *)f->R.rdi, (size_t)f->R.rsi, (int)f->R.rdx, (int)f->R.r10, (off_t)f->R.r8);
+            break;
+
+        case SYS_MUNMAP:
+            syscall_munmap((void *)f->R.rdi);
             break;
         
         default:
