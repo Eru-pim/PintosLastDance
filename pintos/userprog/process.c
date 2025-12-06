@@ -782,14 +782,9 @@ lazy_load_segment (struct page *page, void *aux) {
 
     uint8_t *kpage = page->frame->kva;
     
-    lock_acquire(&filesys_lock);
     file_seek(file, ofs);
-    int bytes = file_read(file, kpage, page_read_bytes);
-    lock_release(&filesys_lock);
-
-    if (bytes != (int)page_read_bytes)
+    if (file_read(file, kpage, page_read_bytes) != page_read_bytes)
         return false;
-    
     memset(kpage+page_read_bytes, 0, page_zero_bytes);
     
     free(aux);

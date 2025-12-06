@@ -196,12 +196,10 @@ do_munmap (void *addr) {
         size_t page_zero_bytes = file_page.page_zero_bytes;
         bool writable = file_page.writable;
 
-        if (writable && page->frame && pml4_is_dirty(thread_current()->pml4, p)){
-            lock_acquire(&filesys_lock);
-            file_write_at(file, page->frame->kva, page_read_bytes, offset);
-            lock_release(&filesys_lock);
-        }
         lock_acquire(&filesys_lock);
+        if (writable && page->frame && pml4_is_dirty(thread_current()->pml4, p)){
+            file_write_at(file, page->frame->kva, page_read_bytes, offset);
+        }
         spt_remove_page(&thread_current()->spt, page);
         lock_release(&filesys_lock);
     }
