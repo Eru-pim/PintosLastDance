@@ -297,10 +297,13 @@ lock_release (struct lock *lock) {
 	ASSERT (lock != NULL);
 	ASSERT (lock_held_by_current_thread (lock));
 	
-	kill_donor(lock);
+    enum intr_level old_level = intr_disable();
+	
+    kill_donor(lock);
 	retrieve_priority ();
-
 	lock->holder = NULL;
+    
+    intr_set_level(old_level);
 	sema_up (&lock->semaphore);
 }
 
@@ -406,7 +409,7 @@ donation_priority (void)
 {
 	struct thread *curr = thread_current();
 	struct thread *holder;
-
+    
 	int priority = curr->priority;
 	for (int i = 0; i < 8; i++)
 	{

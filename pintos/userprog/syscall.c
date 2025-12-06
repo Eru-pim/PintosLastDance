@@ -14,6 +14,7 @@
 #include "userprog/gdt.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
+#include "vm/file.h"
 #include "intrinsic.h"
 
 void syscall_entry (void);
@@ -323,6 +324,25 @@ static void syscall_close(struct thread *t, int fd) {
     }
 }
 
+static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t offset) {
+    struct thread *t = thread_current();
+    int idx = find_idx(t, fd);
+
+    if (idx == -1) {
+        return NULL;
+    }
+
+    if (t->fd_table[idx].file <= STDOUT_FILE) {
+        return NULL;
+    }
+
+    return do_mmap(addr, length, writable, t->fd_table[idx].file, offset);
+}
+
+static void syscall_munmap(void *addr) {
+    do_munmap(addr);
+}
+
 static int syscall_dup2(struct thread *t, int oldfd, int newfd) {
     if (oldfd < 0 || newfd < 0) {
         return -1;
@@ -422,6 +442,15 @@ syscall_handler (struct intr_frame *f) {
             syscall_close(t, (int)f->R.rdi);
             break;
         
+        // project 3
+        case SYS_MMAP:
+            f->R.rax = syscall_mmap((void *)f->R.rdi, (size_t)f->R.rsi, (int)f->R.rdx, (int)f->R.r10, (off_t)f->R.r8);
+            break;
+        
+        case SYS_MUNMAP:
+            syscall_munmap((void *)f->R.rdi);
+            break;
+
         // project 2 EXTRA
         case SYS_DUP2:
             f->R.rax = syscall_dup2(t, (int)f->R.rdi, (int)f->R.rsi);
