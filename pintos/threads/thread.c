@@ -640,6 +640,9 @@ init_thread (struct thread *t, const char *name, int priority) {
     sema_init(&t->sema_load, 0);
     sema_init(&t->sema_exit, 0);
 #endif /* USERPROG */
+#ifdef VM
+    list_init(&t->mmap_list);
+#endif /* VM */
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

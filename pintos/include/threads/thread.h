@@ -153,6 +153,7 @@ struct thread {
     /* Table for whole virtual memory owned by thread. */
     struct supplemental_page_table spt;
     uintptr_t user_rsp;
+    struct list mmap_list;
 #endif
 
     /* Owned by thread.c. */

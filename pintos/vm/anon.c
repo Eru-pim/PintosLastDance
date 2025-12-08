@@ -58,4 +58,16 @@ anon_destroy (struct page *page) {
     if (anon_page->swap_slot != -1) {
         bitmap_reset(swap_table, anon_page->swap_slot);
     }
+
+    if (page->frame != NULL) {
+        pml4_clear_page(thread_current()->pml4, page->va);
+        lock_acquire(&frame_lock);
+        list_remove(&page->frame->elem);
+        lock_release(&frame_lock);
+
+        palloc_free_page(page->frame->kva);
+        free(page->frame);
+        
+        page->frame = NULL;
+    }
 }

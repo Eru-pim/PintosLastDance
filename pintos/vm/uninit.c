@@ -78,6 +78,9 @@ uninit_destroy (struct page *page) {
             free(aux);
         }
     } else if (type == VM_FILE) {
-        ; // pass
+        struct lazy_aux *aux = uninit->aux;
+        if (aux) {
+            free(aux);
+        }
     }
 }

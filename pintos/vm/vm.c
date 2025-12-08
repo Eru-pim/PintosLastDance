@@ -121,6 +121,9 @@ spt_insert_page (struct supplemental_page_table *spt,
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+    lock_acquire(&spt->spt_lock);
+    hash_delete(&spt->spt_hash, &page->hash_elem);
+    lock_release(&spt->spt_lock);
     vm_dealloc_page (page);
 }
 

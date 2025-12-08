@@ -4,6 +4,7 @@
 #include <hash.h>
 #include <list.h>
 #include <stdbool.h>
+#include "threads/mmu.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
@@ -71,6 +72,9 @@ struct frame {
     struct page *page;
     struct list_elem elem;
 };
+
+extern struct list frame_table;
+extern struct lock frame_lock;
 
 /* The function table for page operations.
  * This is one way of implementing "interface" in C.

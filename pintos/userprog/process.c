@@ -312,6 +312,12 @@ process_exit (void) {
 
     printf ("%s: exit(%d)\n", curr->name, curr->exit_num);
 
+    while (!list_empty(&curr->mmap_list)) {
+        struct list_elem *elem = list_front(&curr->mmap_list);
+        struct mmap_info *info = list_entry(elem, struct mmap_info, elem);
+        do_munmap(info->addr);
+    }
+
     for (int i = 0; i < MAX_FILE; i++) {
         if (curr->fd_table[i].file > STDOUT_FILE) {
             file = curr->fd_table[i].file;
