@@ -6,6 +6,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/mmu.h"
+#include "lib/round.h"
 
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
@@ -88,7 +89,6 @@ check_mmap(void *addr, size_t length, struct file *file, off_t offset){
     for(uintptr_t p = start ; p < end; p += PGSIZE){
         if(spt_find_page(&t->spt, (void *)p)){
             return false;
-            break;
         }
     }
 
@@ -123,21 +123,20 @@ lazy_mmap_segment(struct page *page, void *mmap_aux){
 void *
 do_mmap (void *addr, size_t length, int writable,
         struct file *file, off_t offset) {
-    if (!check_mmap(addr, length, file, offset))
-        goto err;
+    struct mmu *mmu = malloc(sizeof(struct mmu));
     struct file *re_file = file_reopen(file);
-    if (!re_file)
+    if (!re_file || !mmu)
+        goto err;
+    if (!check_mmap(addr, length, file, offset))
         goto err;
     void *va = pg_round_down(addr);
     
-    struct mmu *mmu = malloc(sizeof(struct mmu));
     mmu->file = re_file;
-    mmu->length = length;
+    mmu->length = ROUND_UP(length, PGSIZE);
     mmu->start = va;
     
-    // 변경
     size_t read_bytes = length > file_length(file) - offset ? file_length(file) - offset : length;
-    size_t zero_bytes = 0;
+    size_t zero_bytes = ROUND_UP(length, PGSIZE) - read_bytes;
     while(read_bytes > 0 || zero_bytes > 0){
         size_t page_read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
         size_t page_zero_bytes = PGSIZE - page_read_bytes;
@@ -160,11 +159,14 @@ do_mmap (void *addr, size_t length, int writable,
         va = (uint8_t *)va + PGSIZE;   
     }
 
-    hash_insert(&thread_current()->mmu_hash_list, &mmu->hash_elem);
+    if (hash_insert(&thread_current()->mmu_hash_list, &mmu->hash_elem))
+        goto err;
     return addr;
 err:
-    if(re_file != NULL)
+    if (re_file != NULL)
         file_close(re_file);
+    if (mmu!= NULL)
+        free(mmu);
     return NULL;
 }
 
@@ -181,13 +183,19 @@ do_munmap (void *addr) {
 
     struct hash_iterator i;
     struct mmu *mmu = mmu_lookup(&thread_current()->mmu_hash_list, addr);
-    ASSERT(mmu!=NULL);
+    if(mmu == NULL){
+        thread_current()->exit_num = -1;
+        thread_exit();
+    }
     uintptr_t start = (uintptr_t) mmu->start;
     uintptr_t end = start + (uintptr_t)mmu->length;
 
     for (uintptr_t p = start; p < end; p +=PGSIZE){
         struct page *page = spt_find_page(&thread_current()->spt, (void *)p);
-        ASSERT(page!=NULL);
+        if(page == NULL){
+            thread_current()->exit_num = -1;
+            thread_exit();
+        }
         
         struct file_page file_page = page->file;
         struct file *file = file_page.file;
@@ -198,6 +206,7 @@ do_munmap (void *addr) {
 
         lock_acquire(&filesys_lock);
         if (writable && page->frame && pml4_is_dirty(thread_current()->pml4, p)){
+            // frame이 NULL이 될 수도 있는 경우를 생각해야함
             file_write_at(file, page->frame->kva, page_read_bytes, offset);
         }
         spt_remove_page(&thread_current()->spt, page);

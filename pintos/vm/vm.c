@@ -47,6 +47,7 @@ static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
 static void page_destructor(struct hash_elem *e, void *aux UNUSED);
+static void mmu_destructor(struct hash_elem *e);
 
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
@@ -115,6 +116,9 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+    lock_acquire(&hash_lock);
+    hash_delete(&spt->hash_table, &page->hash_elem);
+    lock_release(&hash_lock);
     vm_dealloc_page (page);
 }
 
@@ -189,14 +193,14 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
     uintptr_t rsp;
     /* TODO: Validate the fault */
     /* TODO: Your code goes here */
-    if (addr != NULL && not_present && addr<USER_STACK){
+    if (addr != NULL && not_present && is_user_vaddr(addr)){
         if(user){
             page = spt_find_page(spt, addr);
             if (page != NULL)
                 return vm_claim_page(addr);
             rsp = f->rsp;
             thread_current()->user_rsp = rsp;
-            if (rsp-PGSIZE <= addr && (uint8_t *)USER_STACK - (uint8_t *)addr <= MAX_STACK_SIZE){
+            if (rsp-PGSIZE <= addr && (uint8_t *)USER_STACK - (uint8_t *)addr <= MAX_STACK_SIZE && addr < USER_STACK){
                 vm_stack_growth(addr);
                 return true;
             }
@@ -208,7 +212,7 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
             if(!thread_current()->user_rsp)
                 return false;
             rsp = thread_current()->user_rsp;
-            if (rsp-PGSIZE <= addr && (uint8_t *)USER_STACK - (uint8_t *)addr <= MAX_STACK_SIZE){
+            if (rsp-PGSIZE <= addr && (uint8_t *)USER_STACK - (uint8_t *)addr <= MAX_STACK_SIZE && addr < USER_STACK){
                 vm_stack_growth(addr);
                 return true;
             }
@@ -306,8 +310,6 @@ supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
 
                 if (!vm_alloc_page_with_initializer(src_page->uninit.type, src_page->va, src_page->writable, src_page->uninit.init, dst_aux))
                     goto err;
-                // if (!vm_claim_page(src_page->va))
-                //     goto err;
                 break;
             }
             case VM_ANON:{
@@ -324,8 +326,20 @@ supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
                     memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
                 break;
             }
-            case VM_FILE:
+            case VM_FILE:{
+                // if (!vm_alloc_page(src_type, src_page->va, src_page->writable))
+                //     goto err;
+                // if (!vm_claim_page(src_page->va))
+                //     goto err;
+                
+                // struct page *dst_page = spt_find_page(dst, src_page->va);
+                // if (dst_page == NULL)
+                //     goto err;
+                // // frame->kva가 NULL일 경우 swap에서 읽어와야 함
+                // if (src_page->frame->kva != NULL)
+                //     memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
                 break;
+            }
             default:
                 break;
         }
@@ -378,6 +392,23 @@ page_lookup (const struct supplemental_page_table *spt, const void *address) {
     return e != NULL ? hash_entry (e, struct page, hash_elem) : NULL;
 }
 
+/* Returns a hash value for mmu m. */
+unsigned
+mmu_hash (const struct hash_elem *m_, void *aux UNUSED) {
+    const struct mmu *m = hash_entry (m_, struct mmu, hash_elem);
+    return hash_bytes (&m->start, sizeof m->start);
+}
+
+/* Returns true if mmu a precedes mmu b. */
+bool
+mmu_less (const struct hash_elem *a_,
+        const struct hash_elem *b_, void *aux UNUSED) {
+    const struct mmu *a = hash_entry (a_, struct mmu, hash_elem);
+    const struct mmu *b = hash_entry (b_, struct mmu, hash_elem);
+
+    return a->start < b->start;
+}
+
 /* Returns the mmu containing the given virtual address, or NULL. */
 struct mmu *
 mmu_lookup(const struct hash *hash_table, const void *addr){
@@ -388,4 +419,15 @@ mmu_lookup(const struct hash *hash_table, const void *addr){
     m.start = (void *)addr;
     e = hash_find(hash_table, &m.hash_elem);
     return e != NULL ? hash_entry(e, struct mmu, hash_elem) : NULL;
+}
+
+void
+mmu_list_kill(struct hash *mmu_table) {
+    hash_destroy(mmu_table, mmu_destructor);
+}
+
+static void
+mmu_destructor(struct hash_elem *e){
+    struct mmu *mmu = hash_entry(e, struct mmu, hash_elem);
+    free(mmu);
 }

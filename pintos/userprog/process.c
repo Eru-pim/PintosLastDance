@@ -74,7 +74,7 @@ initd (void *f_name) {
 #ifdef VM
     supplemental_page_table_init (&thread_current()->spt);
     thread_current()->user_rsp = NULL;
-    hash_init(&thread_current()->mmu_hash_list, page_hash, page_less, NULL);
+    hash_init(&thread_current()->mmu_hash_list, mmu_hash, mmu_less, NULL);
 #endif
 
     process_init ();
@@ -187,6 +187,7 @@ __do_fork (void *aux) {
     supplemental_page_table_init (&current->spt);
     if (!supplemental_page_table_copy (&current->spt, &parent->spt))
         goto error;
+    hash_init(&thread_current()->mmu_hash_list, mmu_hash, mmu_less, NULL);
 #else
     if (!pml4_for_each (parent->pml4, duplicate_pte, parent)) {
         if_.R.rax = -1;
@@ -250,6 +251,7 @@ process_exec (void *f_name) {
     /* We first kill the current context */
     process_cleanup ();
     supplemental_page_table_init(&thread_current()->spt);
+    hash_init(&thread_current()->mmu_hash_list, mmu_hash, mmu_less, NULL);
 
     /* And then load the binary */
     lock_acquire(&filesys_lock);
@@ -354,6 +356,7 @@ process_cleanup (void) {
 
 #ifdef VM
     supplemental_page_table_kill (&curr->spt);
+    mmu_list_kill(&curr->mmu_hash_list);
 #endif
 
     uint64_t *pml4;
@@ -783,7 +786,7 @@ lazy_load_segment (struct page *page, void *aux) {
     uint8_t *kpage = page->frame->kva;
     
     file_seek(file, ofs);
-    if (file_read(file, kpage, page_read_bytes) != page_read_bytes)
+    if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
         return false;
     memset(kpage+page_read_bytes, 0, page_zero_bytes);
     
