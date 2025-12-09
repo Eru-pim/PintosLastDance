@@ -4,6 +4,7 @@
 #include <hash.h>
 #include <list.h>
 #include <stdbool.h>
+#include <string.h>
 #include "threads/mmu.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
@@ -54,6 +55,7 @@ struct page {
     /* Your implementation */
     struct hash_elem hash_elem;
     bool writable;
+    struct thread *owner;
     /* Per-type data are binded into the union.
      * Each function automatically detects the current union */
     union {

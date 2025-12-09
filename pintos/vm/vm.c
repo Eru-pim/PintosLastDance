@@ -10,6 +10,7 @@
 
 struct list frame_table;
 struct lock frame_lock;
+struct list_elem *cursor;
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -131,8 +132,48 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 static struct frame *
 vm_get_victim (void) {
     struct frame *victim = NULL;
-     /* TODO: The policy for eviction is up to you. */
-    PANIC("TODO");
+    struct list_elem *begin;
+    /* TODO: The policy for eviction is up to you. */
+    lock_acquire(&frame_lock);
+
+    if (list_empty(&frame_table)) {
+        lock_release(&frame_lock);
+        PANIC("Zero frame");
+    }
+
+    if (cursor == NULL || cursor == list_end(&frame_table)) {
+        cursor = list_begin(&frame_table);
+    }
+
+    begin = cursor;
+    while (true) {
+        struct frame *frame = list_entry(cursor, struct frame, elem);
+        struct page *page = frame->page;
+
+        cursor = list_next(cursor);
+        if (cursor == list_end(&frame_table)) {
+            cursor = list_begin(&frame_table);
+        }
+
+        if (!page) {
+            continue;
+        }
+
+        struct thread *t = page->owner;
+        if (pml4_is_accessed(t->pml4, page->va)) {
+            pml4_set_accessed(t->pml4, page->va, false);
+        } else {
+            victim = frame;
+            break;
+        }
+
+        if (cursor == begin) {
+            victim = frame;
+            break;
+        }
+    }
+
+    lock_release(&frame_lock);
     return victim;
 }
 
@@ -140,10 +181,14 @@ vm_get_victim (void) {
  * Return NULL on error.*/
 static struct frame *
 vm_evict_frame (void) {
-    struct frame *victim UNUSED = vm_get_victim ();
+    struct frame *victim = vm_get_victim();
     /* TODO: swap out the victim and return the evicted frame. */
-    PANIC("TODO");
-    return NULL;
+    ASSERT(victim != NULL);
+
+    struct page *page = victim->page;
+    swap_out(page);
+    victim->page = NULL;
+    return victim;
 }
 
 /* palloc() and get frame. If there is no available page, evict the page
@@ -260,6 +305,7 @@ vm_do_claim_page (struct page *page) {
     /* Set links */
     frame->page = page;
     page->frame = frame;
+    page->owner = curr;
 
     /* TODO: Insert page table entry to map page's VA to frame's PA. */
     if (!pml4_set_page(curr->pml4, page->va, frame->kva, page->writable)) {
