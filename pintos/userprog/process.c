@@ -340,13 +340,12 @@ process_exit (void) {
     }
 
     file_close(curr->exec_file);
+    process_cleanup();
     sema_up(&curr->sema_wait);
     
     if (curr->parent_thread != NULL) {
         sema_down(&curr->sema_exit);
     }
-
-    process_cleanup();
 }
 
 /* Free the current process's resources. */
@@ -355,6 +354,7 @@ process_cleanup (void) {
     struct thread *curr = thread_current();
 
 #ifdef VM
+    vm_check_mmap();
     supplemental_page_table_kill (&curr->spt);
     mmu_list_kill(&curr->mmu_hash_list);
 #endif

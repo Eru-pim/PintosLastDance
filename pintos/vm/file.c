@@ -20,7 +20,7 @@ static const struct page_operations file_ops = {
     .type = VM_FILE,
 };
 
-static struct lock filesys_lock;
+extern struct lock filesys_lock;
 
 struct mmap_aux{
     struct file *file;
@@ -58,18 +58,70 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
     struct file_page *file_page UNUSED = &page->file;
+    struct file *file = file_page->file;
+    size_t offset = file_page->offset;
+    size_t page_read_bytes = file_page->page_read_bytes;
+	size_t page_zero_bytes = file_page->page_zero_bytes;
+    bool writable = file_page->writable;
+
+    void *kpage = page->frame->kva;
+
+    lock_acquire(&filesys_lock);
+    if (file_read_at(file, kpage, page_read_bytes, offset) != (int)page_read_bytes){
+        lock_release(&filesys_lock);    
+        return false;
+    }
+    lock_release(&filesys_lock);
+    memset(kpage+page_read_bytes, 0, page_zero_bytes);
+
+    return true;
 }
 
 /* Swap out the page by writeback contents to the file. */
 static bool
 file_backed_swap_out (struct page *page) {
     struct file_page *file_page UNUSED = &page->file;
+    struct file *file = file_page->file;
+    size_t offset = file_page->offset;
+    size_t page_read_bytes = file_page->page_read_bytes;
+
+    void *kpage = page->frame->kva;
+
+    if (pml4_is_dirty(page->thread->pml4, page->va)){
+        lock_acquire(&filesys_lock);
+        file_write_at(file, kpage, page_read_bytes, offset);
+        lock_release(&filesys_lock);
+
+        pml4_set_dirty(page->thread->pml4, page->va, false);
+    }
+
+    return true;
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
     struct file_page *file_page UNUSED = &page->file;
+    
+    if (page->frame == NULL) {
+        return;
+    }
+
+    struct file *file = file_page->file;
+    off_t offset = file_page->offset;
+    size_t page_read_bytes = file_page->page_read_bytes;
+    void *kpage = page->frame->kva;
+    
+    if (pml4_is_dirty(page->thread->pml4, page->va)){
+        lock_acquire(&filesys_lock);
+        file_write_at(file, kpage, page_read_bytes, offset);
+        lock_release(&filesys_lock);
+        pml4_set_dirty(page->thread->pml4, page->va, false);
+    }
+
+    pml4_clear_page(page->thread->pml4, page->va);
+
+    page = NULL;
 }
 
 static bool
@@ -112,7 +164,6 @@ lazy_mmap_segment(struct page *page, void *mmap_aux){
     lock_release(&filesys_lock);
     if (bytes != (int)page_read_bytes)
         return false;
-
     memset(kpage + page_read_bytes, 0, page_zero_bytes);
 
     free(aux);
@@ -191,26 +242,32 @@ do_munmap (void *addr) {
     uintptr_t end = start + (uintptr_t)mmu->length;
 
     for (uintptr_t p = start; p < end; p +=PGSIZE){
-        struct page *page = spt_find_page(&thread_current()->spt, (void *)p);
-        if(page == NULL){
-            thread_current()->exit_num = -1;
-            thread_exit();
-        }
-        
-        struct file_page file_page = page->file;
-        struct file *file = file_page.file;
-        off_t offset = file_page.offset;
-        size_t page_read_bytes = file_page.page_read_bytes;
-        size_t page_zero_bytes = file_page.page_zero_bytes;
-        bool writable = file_page.writable;
-
-        lock_acquire(&filesys_lock);
-        if (writable && page->frame && pml4_is_dirty(thread_current()->pml4, p)){
-            // frame이 NULL이 될 수도 있는 경우를 생각해야함
-            file_write_at(file, page->frame->kva, page_read_bytes, offset);
+        void *va = (void *)p;
+        struct page *page = spt_find_page(&thread_current()->spt, va);
+        if(page == NULL)
+            continue;
+        if (page->frame == NULL) {
+            if (!vm_claim_page(va))
+                continue;
+            page = spt_find_page(&thread_current()->spt, va);
+            if (page == NULL)
+                continue;
         }
         spt_remove_page(&thread_current()->spt, page);
-        lock_release(&filesys_lock);
     }
     delete_mmu(mmu);
+}
+
+void
+vm_check_mmap(){
+    struct thread *curr = thread_current();
+
+    while(!hash_empty(&curr->mmu_hash_list)){
+        struct hash_iterator i;
+        hash_first(&i, &curr->mmu_hash_list);
+        if (hash_next(&i)){
+            struct mmu *m = hash_entry(hash_cur(&i), struct mmu, hash_elem);
+            do_munmap(m->start);
+        }
+    }
 }

@@ -7,8 +7,8 @@
 #include <hash.h>
 #include <string.h>
 
-static struct list frame_table;
-static struct lock frame_lock;
+struct list frame_table;
+struct lock frame_lock;
 static struct lock hash_lock;
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
@@ -79,6 +79,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
                 goto err;
         }
         page->writable = writable;
+        page->thread = thread_current();
         /* TODO: Insert the page into the spt. */
         if(!spt_insert_page(spt, page))
             goto err;
@@ -123,11 +124,14 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 }
 
 /* Get the struct frame, that will be evicted. */
+// 수정해야함
 static struct frame *
 vm_get_victim (void) {
     struct frame *victim = NULL;
-     /* TODO: The policy for eviction is up to you. */
-
+    /* TODO: The policy for eviction is up to you. */
+    lock_acquire(&frame_lock);
+    victim = list_entry(list_pop_front(&frame_table), struct frame, frame_elem);
+    lock_release(&frame_lock);
     return victim;
 }
 
@@ -137,8 +141,17 @@ static struct frame *
 vm_evict_frame (void) {
     struct frame *victim UNUSED = vm_get_victim ();
     /* TODO: swap out the victim and return the evicted frame. */
+    if (victim == NULL)
+        return NULL;
+    struct page *page = victim->page;
+    if (!swap_out(page))
+        return  NULL;
+    
+    page->frame = NULL;
+    pml4_clear_page(page->thread->pml4, page->va);
+    memset(victim->kva, 0, PGSIZE);
 
-    return NULL;
+    return victim;
 }
 
 /* palloc() and get frame. If there is no available page, evict the page
@@ -151,10 +164,12 @@ vm_get_frame (void) {
 	/* TODO: Fill this function. */
     frame = malloc(sizeof(struct frame));
     if (frame == NULL)
-        goto err;
+        return NULL;
 	frame->kva = palloc_get_page(PAL_USER);
 	if(frame->kva == NULL){
-		goto err;
+        struct frame *victim = vm_evict_frame();
+        frame->kva = victim->kva;
+        free(victim);
 	}
     frame->page = NULL;
 	lock_acquire(&frame_lock);
@@ -162,11 +177,6 @@ vm_get_frame (void) {
 	lock_release(&frame_lock);
 
 	return frame;
-err:
-    if(frame != NULL)
-        free(frame);
-    // 나중에 evict 들어가는 자리
-    PANIC("todo\n");
 }
 
 /* Growing the stack. */
@@ -254,6 +264,8 @@ vm_do_claim_page (struct page *page) {
     
     if (!swap_in (page, frame->kva))
         goto err;
+
+    page->thread = thread_current();
 	
     return true;
 err:

@@ -297,10 +297,12 @@ lock_release (struct lock *lock) {
 	ASSERT (lock != NULL);
 	ASSERT (lock_held_by_current_thread (lock));
 	
+	enum intr_level old_level = intr_disable();
 	kill_donor(lock);
 	retrieve_priority ();
-
 	lock->holder = NULL;
+	intr_set_level(old_level);
+	
 	sema_up (&lock->semaphore);
 }
 
