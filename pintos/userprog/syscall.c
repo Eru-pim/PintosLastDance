@@ -358,7 +358,7 @@ static int syscall_dup2(struct thread *t, int oldfd, int newfd) {
         return newfd;
     }
 }
-
+#ifdef VM
 static void *syscall_mmap (struct thread *t, void *addr, size_t length, int writable, int fd, off_t offset){
     int idx = find_idx(t, fd);
     struct file *file = t->fd_table[idx].file;
@@ -369,13 +369,16 @@ static void *syscall_mmap (struct thread *t, void *addr, size_t length, int writ
 static void syscall_munmap (void *addr){
     do_munmap(addr);
 }
+#endif
 
 /* Arguments order: %rdi, %rsi, %rdx, %r10, %r8, %r9 */
 /* The main system call interface */
 void
 syscall_handler (struct intr_frame *f) {
     struct thread *t = thread_current();
+    #ifdef VM
     t->user_rsp = f->rsp;
+    #endif
     switch (f->R.rax) {
         // project 2
         case SYS_HALT:
@@ -441,15 +444,14 @@ syscall_handler (struct intr_frame *f) {
         case SYS_DUP2:
             f->R.rax = syscall_dup2(t, (int)f->R.rdi, (int)f->R.rsi);
             break;
-
+        #ifdef VM
         case SYS_MMAP:
             f->R.rax = syscall_mmap(t, (void *)f->R.rdi, (size_t)f->R.rsi, (int)f->R.rdx, (int)f->R.r10, (off_t)f->R.r8);
             break;
-
         case SYS_MUNMAP:
             syscall_munmap((void *)f->R.rdi);
             break;
-        
+        #endif
         default:
             NOT_REACHED();
     }

@@ -250,9 +250,10 @@ process_exec (void *f_name) {
 
     /* We first kill the current context */
     process_cleanup ();
+    #ifdef VM
     supplemental_page_table_init(&thread_current()->spt);
     hash_init(&thread_current()->mmu_hash_list, mmu_hash, mmu_less, NULL);
-
+    #endif
     /* And then load the binary */
     lock_acquire(&filesys_lock);
     success = load (file_name, &_if);
