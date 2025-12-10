@@ -21,7 +21,7 @@ static const struct page_operations anon_ops = {
 };
 
 static struct bitmap *swap_table;
-static struct lock anon_lock;
+struct lock anon_lock;
 
 /* Initialize the data for anonymous pages */
 void
@@ -109,7 +109,7 @@ anon_destroy (struct page *page) {
         lock_acquire(&anon_lock);
         bitmap_flip(swap_table, anon_page->bit_idx);
         lock_release(&anon_lock);
+        anon_page->bit_idx = -1;
     }
-
-    anon_page->bit_idx = -1;
+    vm_free_frame (page);
 }

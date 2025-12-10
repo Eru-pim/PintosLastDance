@@ -102,26 +102,21 @@ file_backed_swap_out (struct page *page) {
 static void
 file_backed_destroy (struct page *page) {
     struct file_page *file_page UNUSED = &page->file;
-    
-    if (page->frame == NULL) {
-        return;
-    }
-
     struct file *file = file_page->file;
     off_t offset = file_page->offset;
     size_t page_read_bytes = file_page->page_read_bytes;
-    void *kpage = page->frame->kva;
-    
-    if (pml4_is_dirty(page->thread->pml4, page->va)){
-        lock_acquire(&filesys_lock);
-        file_write_at(file, kpage, page_read_bytes, offset);
-        lock_release(&filesys_lock);
-        pml4_set_dirty(page->thread->pml4, page->va, false);
+
+    if (page->frame != NULL) {
+        void *kpage = page->frame->kva;
+        if (pml4_is_dirty (page->thread->pml4, page->va)) {
+            lock_acquire (&filesys_lock);
+            file_write_at (file, kpage, page_read_bytes, offset);
+            lock_release (&filesys_lock);
+            pml4_set_dirty (page->thread->pml4, page->va, false);
+        }
     }
 
-    pml4_clear_page(page->thread->pml4, page->va);
-
-    page = NULL;
+    vm_free_frame (page);
 }
 
 static bool

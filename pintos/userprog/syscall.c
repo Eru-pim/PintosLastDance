@@ -104,11 +104,17 @@ check_user_buffer(const void *buffer, unsigned size, bool to_write) {
         check_addr((void *) page_addr);
 #ifdef VM
         struct page *page = spt_find_page(&thread_current()->spt, (void *) page_addr);
-        if (page != NULL) {
-            if (to_write && !page->writable) {
+        if (page == NULL) {
+            bool handled = vm_try_handle_fault(NULL, (void *) page_addr, false,
+                    to_write, true);
+            if (!handled)
                 terminate_process();
-            }
+            page = spt_find_page(&thread_current()->spt, (void *) page_addr);
+            if (page == NULL)
+                terminate_process();
         }
+        if (to_write && !page->writable && !page->is_cow)
+            terminate_process();
 #endif
         page_addr += PGSIZE;
     }
@@ -139,7 +145,6 @@ static void syscall_exit(int status) {
 static tid_t syscall_fork(const char *thread_name,
                 struct intr_frame *f) {
     check_addr(thread_name);
-
     return process_fork(thread_name, f);
 }
 
