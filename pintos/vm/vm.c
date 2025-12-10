@@ -136,53 +136,59 @@ vm_get_victim (void) {
     /* TODO: The policy for eviction is up to you. */
     lock_acquire(&frame_lock);
 
-    if (list_empty(&frame_table)) {
-        lock_release(&frame_lock);
-        PANIC("Zero frame");
-    }
-
-    if (cursor == NULL || cursor == list_end(&frame_table)) {
-        cursor = list_begin(&frame_table);
-    }
-
-    begin = cursor;
-    while (true) {
-        struct frame *frame = list_entry(cursor, struct frame, elem);
-        struct page *page = frame->page;
-
-        cursor = list_next(cursor);
-        if (cursor == list_end(&frame_table)) {
-            cursor = list_begin(&frame_table);
-        }
-
-        if (!page) {
-            continue;
-        }
-
-        if (frame->ref_count > 1) {
-            if (cursor == begin) {
-                victim = frame;
-                break;
-            }
-            continue;
-        }
-
-        struct thread *t = page->owner;
-        if (pml4_is_accessed(t->pml4, page->va)) {
-            pml4_set_accessed(t->pml4, page->va, false);
-        } else {
-            victim = frame;
-            break;
-        }
-
-        if (cursor == begin) {
-            victim = frame;
-            break;
-        }
-    }
-
+    cursor = list_pop_front(&frame_table);
+    struct frame *frame =  list_entry(cursor, struct frame, elem);
+    list_push_back(&frame_table, cursor);
     lock_release(&frame_lock);
-    return victim;
+    return frame;
+
+    // if (list_empty(&frame_table)) {
+    //     lock_release(&frame_lock);
+    //     PANIC("Zero frame");
+    // }
+
+    // if (cursor == NULL || cursor == list_end(&frame_table)) {
+    //     cursor = list_begin(&frame_table);
+    // }
+
+    // begin = cursor;
+    // while (true) {
+    //     struct frame *frame = list_entry(cursor, struct frame, elem);
+    //     struct page *page = frame->page;
+
+    //     cursor = list_next(cursor);
+    //     if (cursor == list_end(&frame_table)) {
+    //         cursor = list_begin(&frame_table);
+    //     }
+
+    //     if (!page) {
+    //         continue;
+    //     }
+
+    //     if (frame->ref_count > 1) {
+    //         if (cursor == begin) {
+    //             victim = frame;
+    //             break;
+    //         }
+    //         continue;
+    //     }
+
+    //     struct thread *t = page->owner;
+    //     if (pml4_is_accessed(t->pml4, page->va)) {
+    //         pml4_set_accessed(t->pml4, page->va, false);
+    //     } else {
+    //         victim = frame;
+    //         break;
+    //     }
+
+    //     if (cursor == begin) {
+    //         victim = frame;
+    //         break;
+    //     }
+    // }
+
+    // lock_release(&frame_lock);
+    // return victim;
 }
 
 /* Evict one page and return the corresponding frame.
