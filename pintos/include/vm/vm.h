@@ -37,6 +37,7 @@ enum vm_type
 
 struct page_operations;
 struct thread;
+extern struct lock frame_lock;
 
 #define VM_TYPE(type) ((type) & 7)
 
@@ -53,6 +54,7 @@ struct page
     /* Your implementation */
     bool is_page_writable;
     struct hash_elem hash_elem;
+    struct list_elem mmap_elem; // if page was created with mmap
     /* Per-type data are binded into the union.
      * Each function automatically detects the current union */
     union
@@ -71,6 +73,7 @@ struct frame
 {
     void *kva;
     struct page *page;
+    struct list_elem page_table_elem;
 };
 
 /* The function table for page operations.

@@ -145,11 +145,10 @@ check_user_buffer(const void *buffer, unsigned size, bool to_write)
         if (page != NULL)
         {
             if (to_write && !page->is_page_writable)
-                1
-                {
-                    thread_current()->exit_num = -1;
-                    thread_exit();
-                }
+            {
+                thread_current()->exit_num = -1;
+                thread_exit();
+            }
         }
         // else
         // {
@@ -604,7 +603,47 @@ static int syscall_dup2(struct thread *t, int oldfd, int newfd)
         return newfd;
     }
 }
+static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t offset)
+{
+    // return the virtual address
+    struct thread *t = thread_current();
+    // fail if the file opened as fd has a length of zero bytes
+    int idx = find_idx(t, fd);
+    if (idx == -1)
+        return NULL;
+    struct file *t_file = t->fd_table[idx].file;
+    if (t_file == NULL)
+        return NULL;
+    struct file *file = file_reopen(t_file);
+    if (file == NULL)
+        return NULL;
+    struct inode *inode = file_get_inode(file);
+    if (inode_length(inode) == 0)
+        return NULL;
+    //  fail if addr is not page-aligned || addr == 0 || not kernal add
+    if (addr != pg_round_down(addr) || addr == NULL || is_kernel_vaddr(addr) || is_kernel_vaddr(addr + length))
+        return NULL;
+    //  fail when length is zero
+    if (length == 0)
+        return NULL;
+    // file descriptors representing console input and output are not mappable
+    if (file == STDIN_FILE || file == STDOUT_FILE)
+        return NULL;
+    // if (addr + length > (void *)USER_STACK)
+    //     return NULL;
+    // 오버플로우 확인
+    if ((uintptr_t)addr + length < (uintptr_t)addr)
+        return NULL;
+    // offset 확인
+    if (offset % PGSIZE != 0)
+        return NULL;
+    return do_mmap(addr, length, writable, file, offset);
+}
 
+static void syscall_munmap(void *addr)
+{
+    do_munmap(addr);
+}
 /* Arguments order: %rdi, %rsi, %rdx, %r10, %r8, %r9 */
 /* The main system call interface */
 void syscall_handler(struct intr_frame *f)
@@ -676,6 +715,15 @@ void syscall_handler(struct intr_frame *f)
     // project 2 EXTRA
     case SYS_DUP2:
         f->R.rax = syscall_dup2(t, (int)f->R.rdi, (int)f->R.rsi);
+        break;
+
+    // project 3
+    case SYS_MMAP:
+        f->R.rax = syscall_mmap((void *)f->R.rdi, (size_t)f->R.rsi, (int)f->R.rdx, (int)f->R.r10, (off_t)f->R.r8);
+        break;
+
+    case SYS_MUNMAP:
+        syscall_munmap((void *)f->R.rdi);
         break;
 
     default:

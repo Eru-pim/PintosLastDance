@@ -369,6 +369,25 @@ void process_exit(void)
         list_remove(e);
         sema_up(&child->sema_exit);
     }
+    // mmap 용 루프
+    while (!list_empty(&curr->mmap_list))
+    {
+        struct list_elem *e = list_begin(&curr->mmap_list);
+        struct page *page = list_entry(e, struct page, mmap_elem);
+        void *addr = page->va;
+        struct page *first_page = page;
+        while (first_page->file.length == 0)
+        {
+            addr -= PGSIZE;
+            first_page = spt_find_page(&curr->spt, addr);
+            if (first_page == NULL)
+                break;
+        }
+        if (first_page != NULL && first_page->file.length > 0)
+            do_munmap(first_page->va);
+        else
+            list_remove(e);
+    }
 
     file_close(curr->exec_file);
     sema_up(&curr->sema_wait);
@@ -810,16 +829,15 @@ install_page(void *upage, void *kpage, bool writable)
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
-static bool
-lazy_load_segment(struct page *page, void *aux)
+bool lazy_load_segment(struct page *page, void *aux)
 {
     struct lazy_load_info *info = aux;
-    if (info == NULL || info->file == NULL)
-    {
-        printf("ERROR: lazy_load_segment - info=%p, file=%p\n",
-               info, info ? info->file : NULL);
-        return false;
-    }
+    // if (info == NULL || info->file == NULL)
+    // {
+    //     printf("ERROR: lazy_load_segment - info=%p, file=%p\n",
+    //            info, info ? info->file : NULL);
+    //     return false;
+    // }
     // NOTE sync-read 정답
     // bool need_lock = !lock_held_by_current_thread(&filesys_lock);
     // if (need_lock)
@@ -838,6 +856,12 @@ lazy_load_segment(struct page *page, void *aux)
     // if (need_lock)
     //     lock_release(&filesys_lock);
     memset(page->frame->kva + info->read_bytes, 0, info->zero_bytes);
+    if (page->operations->type == VM_FILE)
+    {
+        page->file.file = info->file;
+        page->file.ofs = info->ofs;
+        page->file.length = info->total_length;
+    }
     free(info);
     return true;
 

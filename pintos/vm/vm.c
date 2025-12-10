@@ -7,12 +7,15 @@
 #include "threads/mmu.h"
 #include <string.h>
 #include "userprog/process.h"
+#include "devices/disk.h"
+#include "threads/vaddr.h"
+#include "lib/kernel/bitmap.h"
+#include "vm/anon.h"
 
-static struct lock frame_lock;
 static struct lock hash_lock;
 static struct lock vm_claim_lock;
-static struct list frame_table;
-
+static struct list frame_table; // fifo
+struct lock frame_lock;
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
 void vm_init(void)
@@ -24,7 +27,6 @@ void vm_init(void)
 #endif
 	register_inspect_intr();
 	/* DO NOT MODIFY UPPER LINES. */
-	/* TODO: Your code goes here. */
 	lock_init(&frame_lock);
 	lock_init(&hash_lock);
 	lock_init(&vm_claim_lock);
@@ -140,8 +142,17 @@ static struct frame *
 vm_get_victim(void)
 {
 	struct frame *victim = NULL;
-	/* TODO: The policy for eviction is up to you. */
-
+	// FIFO
+	lock_acquire(&frame_lock);
+	// get the oldest
+	if (list_empty(&frame_table))
+	{
+		lock_release(&frame_lock);
+		return victim;
+	}
+	struct list_elem *e = list_pop_front(&frame_table);
+	victim = list_entry(e, struct frame, page_table_elem);
+	lock_release(&frame_lock);
 	return victim;
 }
 
@@ -150,10 +161,15 @@ vm_get_victim(void)
 static struct frame *
 vm_evict_frame(void)
 {
-	struct frame *victim UNUSED = vm_get_victim();
-	/* TODO: swap out the victim and return the evicted frame. */
-
-	return NULL;
+	struct frame *victim = vm_get_victim();
+	if (victim == NULL)
+		return NULL;
+	if (victim->page && victim->page->operations->swap_out)
+	{
+		if (!(victim->page->operations->swap_out)(victim->page))
+			return NULL;
+	}
+	return victim;
 }
 
 /* palloc() and get frame. If there is no available page, evict the page
@@ -163,28 +179,31 @@ vm_evict_frame(void)
 static struct frame *
 vm_get_frame(void)
 {
-	lock_acquire(&frame_lock);
 	// kernel virtual memory - kernel pool
 	struct frame *frame = malloc(sizeof(struct frame));
 	if (frame == NULL)
 	{
-
 		PANIC("비상");
 	}
 
 	// kernel virtual memory - user pool
 	void *kva = palloc_get_page(PAL_USER);
-	// printf("vm_get_frame: palloc kva=%p\n", kva);
 	if (kva == NULL)
 	{
-		// TODO: try to evict a page to get a frame
-
-		PANIC("todo");
+		struct frame *evict_frame = vm_evict_frame();
+		if (evict_frame == NULL)
+			PANIC("NO FRAME");
+		palloc_free_page(evict_frame->kva);
+		free(evict_frame);
+		kva = palloc_get_page(PAL_USER);
 	}
 
 	frame->kva = kva;
 	frame->page = NULL;
+	lock_acquire(&frame_lock);
+	list_push_back(&frame_table, &frame->page_table_elem);
 	lock_release(&frame_lock);
+
 	ASSERT(frame != NULL);
 	ASSERT(frame->page == NULL);
 	return frame;
@@ -288,7 +307,7 @@ vm_do_claim_page(struct page *page)
 	// lock_acquire(&vm_claim_lock);
 	return true;
 err:
-	palloc_free_page(frame->kva); // ← Still need this!
+	palloc_free_page(frame->kva);
 	free(frame);
 	return false;
 }
@@ -334,6 +353,9 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
 		// Duplicate aux for pages with file backing
 		void *aux = NULL;
 		enum vm_type type = page_get_type(p);
+		// "mappings are not inherited"
+		if (type == VM_FILE || (p->operations->type == VM_UNINIT && p->uninit.type == VM_FILE))
+			continue;
 
 		// Check if this is a VM_UNINIT page with file backing
 		if (p->operations->type == VM_UNINIT && p->uninit.aux != NULL)
@@ -377,14 +399,56 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
 				return false;
 			memcpy(new_page->frame->kva, p->frame->kva, PGSIZE);
 		}
-		else
+		else if (p->operations->type == VM_UNINIT)
 		{
+			// Page not yet loaded - copy the uninit info
 			if (!vm_alloc_page_with_initializer(type, p->va, p->is_page_writable, p->uninit.init, aux))
 			{
 				if (aux != NULL)
 					free(aux);
 				return false;
 			}
+		}
+		else if (type == VM_ANON && p->anon.swap_slot != (size_t)-1)
+		{
+			// Parent page is swapped out - copy the swap slot to child
+			// Create child page
+			if (!vm_alloc_page_with_initializer(type, p->va, p->is_page_writable, NULL, NULL))
+				return false;
+
+			struct page *new_page = spt_find_page(dst, p->va);
+
+			// Allocate a new swap slot for child
+			lock_acquire(&swap_lock);
+			size_t child_swap_slot = bitmap_scan_and_flip(swap_table, 0, 1, false);
+			lock_release(&swap_lock);
+
+			if (child_swap_slot == BITMAP_ERROR)
+				return false;
+
+			// Copy swap data from parent slot to child slot
+			struct disk *swap_disk = disk_get(1, 1);
+			disk_sector_t parent_sector = p->anon.swap_slot * (PGSIZE / DISK_SECTOR_SIZE);
+			disk_sector_t child_sector = child_swap_slot * (PGSIZE / DISK_SECTOR_SIZE);
+
+			char buffer[DISK_SECTOR_SIZE];
+			for (int i = 0; i < (PGSIZE / DISK_SECTOR_SIZE); i++)
+			{
+				disk_read(swap_disk, parent_sector + i, buffer);
+				disk_write(swap_disk, child_sector + i, buffer);
+			}
+
+			// Set child's swap slot
+			new_page->anon.swap_slot = child_swap_slot;
+			// Mark that child page is swapped out (no frame)
+			new_page->frame = NULL;
+		}
+		else if (type == VM_ANON)
+		{
+			// Anon page not swapped - this shouldn't happen in the else branch
+			// but create an empty page just in case
+			if (!vm_alloc_page_with_initializer(type, p->va, p->is_page_writable, NULL, NULL))
+				return false;
 		}
 	}
 
@@ -394,14 +458,14 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
 void spt_destroy_func(struct hash_elem *h_elem, void *aux UNUSED)
 {
 	struct page *p = hash_entry(h_elem, struct page, hash_elem);
-	if (p->frame != NULL)
-	{
-		// palloc_free_page(p->frame->kva); // ← THE CRITICAL FIX!
-		free(p->frame);
-		// p->frame = NULL;
-	}
-	if (p)
-		destroy(p);
+	// if (p->frame != NULL)
+	// {
+	// 	palloc_free_page(p->frame->kva); // ← THE CRITICAL FIX!
+	// 	free(p->frame);
+	// 	p->frame = NULL;
+	// }
+	// if (p)
+	destroy(p);
 	free(p);
 }
 
