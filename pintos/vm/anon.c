@@ -95,12 +95,22 @@ anon_destroy (struct page *page) {
 
     if (page->frame != NULL) {
         pml4_clear_page(thread_current()->pml4, page->va);
-        lock_acquire(&frame_lock);
-        list_remove(&page->frame->elem);
-        lock_release(&frame_lock);
 
-        palloc_free_page(page->frame->kva);
-        free(page->frame);
+        lock_acquire(&page->frame->ref_lock);
+        page->frame->ref_count--;
+
+        if (page->frame->ref_count == 0) {
+            lock_release(&page->frame->ref_lock);
+
+            lock_acquire(&frame_lock);
+            list_remove(&page->frame->elem);
+            lock_release(&frame_lock);
+
+            palloc_free_page(page->frame->kva);
+            free(page->frame);
+        } else {
+            lock_release(&page->frame->ref_lock);
+        }
         
         page->frame = NULL;
     }

@@ -55,6 +55,7 @@ struct page {
     /* Your implementation */
     struct hash_elem hash_elem;
     bool writable;
+    bool cow;
     struct thread *owner;
     /* Per-type data are binded into the union.
      * Each function automatically detects the current union */
@@ -73,6 +74,8 @@ struct frame {
     void *kva;
     struct page *page;
     struct list_elem elem;
+    int ref_count;
+    struct lock ref_lock;
 };
 
 extern struct list frame_table;

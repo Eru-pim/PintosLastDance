@@ -186,6 +186,19 @@ __do_fork (void *aux) {
     supplemental_page_table_init (&current->spt);
     if (!supplemental_page_table_copy (&current->spt, &parent->spt))
         goto error;
+    struct list_elem *elem;
+    for (elem = list_begin(&parent->mmap_list); 
+        elem != list_end(&parent->mmap_list); 
+        elem = list_next(elem)) {
+        struct mmap_info *src_info = list_entry(elem, struct mmap_info, elem);
+        struct mmap_info *dst_info = malloc(sizeof(struct mmap_info));
+        
+        dst_info->addr = src_info->addr;
+        dst_info->page_count = src_info->page_count;
+        dst_info->file = file_reopen(src_info->file);
+        
+        list_push_back(&current->mmap_list, &dst_info->elem);
+    }
 #else
     if (!pml4_for_each (parent->pml4, duplicate_pte, parent)) {
         if_.R.rax = -1;

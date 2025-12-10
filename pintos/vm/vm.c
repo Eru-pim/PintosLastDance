@@ -63,7 +63,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
     } else if (VM_TYPE(type) == VM_FILE) {
         initializer = file_backed_initializer;
     } else {
-        PANIC("TODO");
+        PANIC("Project 4");
     }
 
     struct supplemental_page_table *spt = &thread_current ()->spt;
@@ -159,6 +159,14 @@ vm_get_victim (void) {
             continue;
         }
 
+        if (frame->ref_count > 1) {
+            if (cursor == begin) {
+                victim = frame;
+                break;
+            }
+            continue;
+        }
+
         struct thread *t = page->owner;
         if (pml4_is_accessed(t->pml4, page->va)) {
             pml4_set_accessed(t->pml4, page->va, false);
@@ -204,16 +212,16 @@ vm_get_frame (void) {
     if (!(frame->kva = palloc_get_page(PAL_USER | PAL_ZERO))) {
         free(frame);
         frame = vm_evict_frame();
-        frame->page = NULL;
     } else {
-        frame->page = NULL;
         lock_acquire(&frame_lock);
         list_push_back(&frame_table, &frame->elem);
         lock_release(&frame_lock);
     }
 
-    ASSERT (frame != NULL);
-    ASSERT (frame->page == NULL);
+    frame->page = NULL;
+    frame->ref_count = 1;
+    lock_init(&frame->ref_lock);
+
     return frame;
 }
 
@@ -230,7 +238,33 @@ vm_stack_growth (void *addr) {
 
 /* Handle the fault on write_protected page */
 static bool
-vm_handle_wp (struct page *page UNUSED) {
+vm_handle_wp (struct page *page) {
+    struct frame *old_frame = page->frame;
+    struct thread *curr = thread_current();
+
+    lock_acquire(&old_frame->ref_lock);
+    if (old_frame->ref_count == 1) {
+        page->cow = false;
+        pml4_set_page(curr->pml4, page->va, old_frame->kva, page->writable);
+        lock_release(&old_frame->ref_lock);
+        return true;
+    }
+
+    old_frame->ref_count--;
+    lock_release(&old_frame->ref_lock);
+
+    struct frame *new_frame = vm_get_frame();
+    memcpy(new_frame->kva, old_frame->kva, PGSIZE);
+
+    new_frame->page = page;
+    new_frame->ref_count = 1;
+    page->frame = new_frame;
+    page->cow = false;
+
+    pml4_clear_page(curr->pml4, page->va);
+    pml4_set_page(curr->pml4, page->va, new_frame->kva, page->writable);
+
+    return true;
 }
 
 /* Return true on success */
@@ -247,10 +281,6 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
         return false;
     }
 
-    if (!not_present) {
-        return false;
-    }
-
     if (user) {
         rsp = f->rsp;
     } else {
@@ -259,10 +289,19 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
     
     page = spt_find_page(spt, addr);
     if (page) {
-        if (write && !page->writable) {
+        if (!not_present && write) {
+            if (page->cow && page->writable) {
+                return vm_handle_wp(page);
+            }
             return false;
         }
-        return vm_do_claim_page(page);
+
+        if (not_present) {
+            if (write && !page->writable) {
+                return false;
+            }
+            return vm_do_claim_page(page);
+        }
     }
 
     void *fault_page = pg_round_down(addr);
@@ -383,15 +422,75 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
                 goto err;
             }
         } else if (VM_TYPE(src_page->operations->type) == VM_ANON) {
-            if (!vm_alloc_page(src_page->operations->type, src_page->va, src_page->writable)) {
+            if (src_page->frame == NULL) {
+                if (!vm_do_claim_page(src_page)) {
+                    goto err;
+                }
+            }
+
+            dst_page = malloc(sizeof(struct page));
+            if (!dst_page) {
                 goto err;
             }
 
-            if (!vm_claim_page(src_page->va))
-                goto err;
+            dst_page->operations = src_page->operations;
+            dst_page->va = src_page->va;
+            dst_page->frame = src_page->frame;
+            dst_page->writable = src_page->writable;
+            dst_page->owner = thread_current();
 
-            dst_page = spt_find_page(dst, src_page->va);
-            memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
+            dst_page->anon.swap_slot = -1;
+            
+            dst_page->cow = true;
+            src_page->cow = true;
+            lock_acquire(&src_page->frame->ref_lock);
+            src_page->frame->ref_count++;
+            lock_release(&src_page->frame->ref_lock);
+
+            pml4_set_page(src_page->owner->pml4, src_page->va, src_page->frame->kva, false);
+            pml4_set_page(dst_page->owner->pml4, dst_page->va, dst_page->frame->kva, false);
+
+            if (!spt_insert_page(dst, dst_page)) {
+                free(dst_page);
+                goto err;
+            }
+        } else if (VM_TYPE(src_page->operations->type) == VM_FILE) {
+            if (src_page->frame == NULL) {
+                if (!vm_do_claim_page(src_page)) {
+                    goto err;
+                }
+            }
+
+            dst_page = malloc(sizeof(struct page));
+            if (!dst_page) {
+                goto err;
+            }
+
+            dst_page->operations = src_page->operations;
+            dst_page->va = src_page->va;
+            dst_page->frame = src_page->frame;
+            dst_page->writable = src_page->writable;
+            dst_page->owner = thread_current();
+
+            dst_page->file.file = file_reopen(src_page->file.file);
+            dst_page->file.ofs = src_page->file.ofs;
+            dst_page->file.read_bytes = src_page->file.read_bytes;
+            dst_page->file.zero_bytes = src_page->file.zero_bytes;
+
+            dst_page->cow = true;
+            src_page->cow = true;
+            lock_acquire(&src_page->frame->ref_lock);
+            src_page->frame->ref_count++;
+            lock_release(&src_page->frame->ref_lock);
+
+            pml4_set_page(src_page->owner->pml4, src_page->va, src_page->frame->kva, false);
+            pml4_set_page(dst_page->owner->pml4, dst_page->va, dst_page->frame->kva, false);
+
+            if (!spt_insert_page(dst, dst_page)) {
+                file_close(dst_page->file.file);
+                free(dst_page);
+                goto err;
+            }
         }
     }
 
